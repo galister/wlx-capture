@@ -20,7 +20,7 @@ This project is in a highly experimental state. If you want to talk about this p
 
 ### Pipewire Setup
 ```rust
-let Ok(node_id) = pipewire_select_screen(token.as_deref()).await else {
+let Ok(node_id) = pipewire_select_screen(None).await else {
     return;
 };
 let capture = PipewireCapture::new(

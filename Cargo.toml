@@ -2,6 +2,13 @@
 name = "wlx-capture"
 version = "0.1.0"
 edition = "2021"
+authors = ["galister"]
+description = "Screen capture library for Wayland and X11"
+repository = "https://github.com/galister/wlx-capture"
+keywords = ["desktop", "capture", "pipewire", "wayland", "x11"]
+categories = ["computer-vision", "multimedia::images"]
+documentation = "https://docs.rs/wlx-capture"
+license = "GPL-3.0"
 
 [features]
 default = ["wlr", "pipewire", "xshm"]

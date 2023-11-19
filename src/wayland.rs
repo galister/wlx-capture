@@ -10,7 +10,7 @@ use smithay_client_toolkit::reexports::{
     protocols_wlr::export_dmabuf::v1::client::zwlr_export_dmabuf_manager_v1::ZwlrExportDmabufManagerV1,
 };
 
-use wayland_client::{
+pub use wayland_client::{
     globals::{registry_queue_init, GlobalListContents},
     protocol::{
         wl_output::{self, Transform, WlOutput},
@@ -142,10 +142,7 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
                     output.done = true;
                     debug!(
                         "Discovered WlOutput {}; Size: {:?}; Logical Size: {:?}; Pos: {:?}",
-                        output.name,
-                        output.size,
-                        output.logical_size,
-                        output.logical_pos
+                        output.name, output.size, output.logical_size, output.logical_pos
                     );
                 }
             }

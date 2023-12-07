@@ -13,7 +13,7 @@ use crate::{
     WlxCapture,
 };
 
-use log::{warn,debug};
+use log::{debug, warn};
 
 pub struct WlrDmabufCapture {
     output_idx: usize,
@@ -43,7 +43,10 @@ impl WlrDmabufCapture {
 impl WlxCapture for WlrDmabufCapture {
     fn init(&mut self) -> std::sync::mpsc::Receiver<WlxFrame> {
         debug_assert!(self.wl.is_some());
-        debug!("init wlr-dmabuf capture on output {}", self.wl.as_ref().unwrap().outputs[self.output_idx].name);
+        debug!(
+            "{}: Init wlr-dmabuf capture",
+            self.wl.as_ref().unwrap().outputs[self.output_idx].name
+        );
 
         let (tx, rx) = std::sync::mpsc::channel::<WlxFrame>();
         self.sender = Some(tx);
@@ -82,6 +85,8 @@ fn request_dmabuf_frame(
     };
 
     let (tx, rx) = mpsc::sync_channel::<zwlr_export_dmabuf_frame_v1::Event>(1024);
+
+    let name = &client.outputs[output_idx].name.clone();
 
     let _ = dmabuf_manager.capture_output(
         1,
@@ -133,11 +138,11 @@ fn request_dmabuf_frame(
             let Some(frame) = frame.take() else {
                 return;
             };
-            debug!("DMA-Buf frame captured");
+            debug!("{}: DMA-Buf frame captured", name);
             let _ = sender.send(WlxFrame::Dmabuf(frame));
         }
         zwlr_export_dmabuf_frame_v1::Event::Cancel { .. } => {
-            warn!("DMA-Buf frame capture cancelled");
+            warn!("{}: DMA-Buf frame capture cancelled", name);
         }
         _ => {}
     });

@@ -22,6 +22,7 @@ xshm = ["dep:xcb", "dep:rxscreen"]
 [dependencies]
 ashpd = { version = "0.6.2", optional = true }
 drm-fourcc = "2.2.0"
+idmap = "0.2.21"
 libc = "0.2.147"
 libspa-sys = "0.7.2"
 log = "0.4.20"

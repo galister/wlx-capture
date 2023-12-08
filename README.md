@@ -35,9 +35,9 @@ let capture = PipewireCapture::new(
 let wl = WlxClient::new();
 
 // select desired screen
-let output_id = wl.outputs[0].id;
+let output_id = wl.outputs.keys().first().unwrap();
 
-let mut capture = WlrDmabufCapture::new(wl, output_id).unwrap();
+let mut capture = WlrDmabufCapture::new(wl, *output_id).unwrap();
 ```
 
 
@@ -80,3 +80,4 @@ loop {
 Notes: 
 - `PipewireCapture` will produce frames on its own and doesn't require `request_new_frame`.
 - You may call `request_new_frame` at any time after `init` without worrying if a frame capture is already in progress.
+- Calling `request_new_frame` when a frame is not ready yet will return and not trigger another frame capture.

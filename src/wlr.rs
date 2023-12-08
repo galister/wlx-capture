@@ -16,37 +16,26 @@ use crate::{
 use log::{debug, warn};
 
 pub struct WlrDmabufCapture {
-    output_idx: usize,
+    output_id: u32,
     wl: Option<Box<WlxClient>>,
     handle: Option<JoinHandle<Box<WlxClient>>>,
     sender: Option<Sender<WlxFrame>>,
 }
 
 impl WlrDmabufCapture {
-    pub fn new(wl: WlxClient, output_id: u32) -> Option<Self> {
-        let mut output_idx = None;
-        for i in 0..wl.outputs.len() {
-            if wl.outputs[i].id == output_id {
-                output_idx = Some(i);
-                break;
-            }
-        }
-        output_idx.map(|output_idx| Self {
-            output_idx,
+    pub fn new(wl: WlxClient, output_id: u32) -> Self {
+        Self {
+            output_id,
             wl: Some(Box::new(wl)),
             handle: None,
             sender: None,
-        })
+        }
     }
 }
 
 impl WlxCapture for WlrDmabufCapture {
     fn init(&mut self) -> std::sync::mpsc::Receiver<WlxFrame> {
         debug_assert!(self.wl.is_some());
-        debug!(
-            "{}: Init wlr-dmabuf capture",
-            self.wl.as_ref().unwrap().outputs[self.output_idx].name
-        );
 
         let (tx, rx) = std::sync::mpsc::channel::<WlxFrame>();
         self.sender = Some(tx);
@@ -56,7 +45,12 @@ impl WlxCapture for WlrDmabufCapture {
     fn resume(&mut self) {}
     fn request_new_frame(&mut self) {
         if let Some(handle) = self.handle.take() {
-            self.wl = Some(handle.join().unwrap());
+            if handle.is_finished() {
+                self.wl = Some(handle.join().unwrap());
+            } else {
+                self.handle = Some(handle);
+                return;
+            }
         }
 
         let Some(wl) = self.wl.take() else {
@@ -68,8 +62,8 @@ impl WlxCapture for WlrDmabufCapture {
                 .sender
                 .clone()
                 .expect("must call init once before request_new_frame");
-            let output_idx = self.output_idx;
-            move || request_dmabuf_frame(wl, output_idx, sender)
+            let output_id = self.output_id;
+            move || request_dmabuf_frame(wl, output_id, sender)
         }));
     }
 }
@@ -77,23 +71,20 @@ impl WlxCapture for WlrDmabufCapture {
 /// Request a new DMA-Buf frame using the wlr-export-dmabuf protocol.
 fn request_dmabuf_frame(
     client: Box<WlxClient>,
-    output_idx: usize,
+    output_id: u32,
     sender: Sender<WlxFrame>,
 ) -> Box<WlxClient> {
     let Some(dmabuf_manager) = client.maybe_wlr_dmabuf_mgr.as_ref() else {
         return client;
     };
 
+    let Some(output) = client.outputs.get(&output_id) else {
+        return client;
+    };
+
     let (tx, rx) = mpsc::sync_channel::<zwlr_export_dmabuf_frame_v1::Event>(1024);
 
-    let name = &client.outputs[output_idx].name.clone();
-
-    let _ = dmabuf_manager.capture_output(
-        1,
-        &client.outputs[output_idx].wl_output,
-        &client.queue_handle,
-        tx.clone(),
-    );
+    let _ = dmabuf_manager.capture_output(1, &output.wl_output, &client.queue_handle, tx.clone());
 
     let mut client = client;
     client.dispatch();
@@ -138,11 +129,11 @@ fn request_dmabuf_frame(
             let Some(frame) = frame.take() else {
                 return;
             };
-            debug!("{}: DMA-Buf frame captured", name);
+            debug!("DMA-Buf frame captured");
             let _ = sender.send(WlxFrame::Dmabuf(frame));
         }
         zwlr_export_dmabuf_frame_v1::Event::Cancel { .. } => {
-            warn!("{}: DMA-Buf frame capture cancelled", name);
+            warn!("DMA-Buf frame capture cancelled");
         }
         _ => {}
     });

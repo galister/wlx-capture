@@ -1,5 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
+use idmap::IdMap;
 use log::debug;
 
 use smithay_client_toolkit::reexports::{
@@ -10,6 +14,7 @@ use smithay_client_toolkit::reexports::{
     protocols_wlr::export_dmabuf::v1::client::zwlr_export_dmabuf_manager_v1::ZwlrExportDmabufManagerV1,
 };
 
+use wayland_client::globals::GlobalList;
 pub use wayland_client::{
     globals::{registry_queue_init, GlobalListContents},
     protocol::{
@@ -29,15 +34,18 @@ pub struct WlxOutput {
     pub logical_size: (i32, i32),
     pub transform: Transform,
     done: bool,
+    updated: Instant,
 }
 
 pub struct WlxClient {
     pub connection: Arc<Connection>,
     pub xdg_output_mgr: ZxdgOutputManagerV1,
     pub maybe_wlr_dmabuf_mgr: Option<ZwlrExportDmabufManagerV1>,
-    pub outputs: Vec<WlxOutput>,
+    pub outputs: IdMap<u32, WlxOutput>,
     pub queue: Arc<Mutex<EventQueue<Self>>>,
+    pub globals: GlobalList,
     pub queue_handle: QueueHandle<Self>,
+    default_output_name: Arc<str>,
 }
 
 impl WlxClient {
@@ -52,44 +60,66 @@ impl WlxClient {
                 .bind(&qh, 2..=3, ())
                 .expect(ZxdgOutputManagerV1::interface().name),
             maybe_wlr_dmabuf_mgr: globals.bind(&qh, 1..=1, ()).ok(),
-            outputs: vec![],
+            outputs: IdMap::new(),
             queue: Arc::new(Mutex::new(queue)),
-            queue_handle: qh.clone(),
+            globals,
+            queue_handle: qh,
+            default_output_name: "Unknown".into(),
         };
 
-        for o in globals.contents().clone_list().iter() {
+        state.refrest_outputs();
+
+        Some(state)
+    }
+
+    pub fn refrest_outputs(&mut self) -> bool {
+        let now = Instant::now();
+        let mut changed = false;
+
+        for o in self.globals.contents().clone_list().iter() {
             if o.interface == WlOutput::interface().name {
-                let wl_output: WlOutput = globals.registry().bind(o.name, o.version, &qh, o.name);
+                let wl_output: WlOutput =
+                    self.globals
+                        .registry()
+                        .bind(o.name, o.version, &self.queue_handle, o.name);
 
-                state.xdg_output_mgr.get_xdg_output(&wl_output, &qh, o.name);
+                if let Some(output) = self.outputs.get_mut(o.name) {
+                    output.updated = now;
+                } else {
+                    self.xdg_output_mgr
+                        .get_xdg_output(&wl_output, &self.queue_handle, o.name);
+                    let output = WlxOutput {
+                        wl_output,
+                        id: o.name,
+                        name: self.default_output_name.clone(),
+                        model: self.default_output_name.clone(),
+                        size: (0, 0),
+                        logical_pos: (0, 0),
+                        logical_size: (0, 0),
+                        transform: Transform::Normal,
+                        done: false,
+                        updated: now,
+                    };
 
-                let unknown: Arc<str> = "Unknown".into();
-
-                let output = WlxOutput {
-                    wl_output,
-                    id: o.name,
-                    name: unknown.clone(),
-                    model: unknown.clone(),
-                    size: (0, 0),
-                    logical_pos: (0, 0),
-                    logical_size: (0, 0),
-                    transform: Transform::Normal,
-                    done: false,
-                };
-
-                state.outputs.push(output);
+                    changed = true;
+                    self.outputs.insert(o.name, output);
+                    self.outputs.get_mut(o.name);
+                }
             }
         }
 
-        state.dispatch();
+        let old_len = self.outputs.len();
+        self.outputs.retain(|_, o| o.updated == now);
+        changed |= old_len != self.outputs.len();
 
-        Some(state)
+        self.dispatch();
+        changed
     }
 
     /// Get the logical width and height of the desktop.
     pub fn get_desktop_extent(&self) -> (i32, i32) {
         let mut extent = (0, 0);
-        for output in self.outputs.iter() {
+        for output in self.outputs.values() {
             extent.0 = extent.0.max(output.logical_pos.0 + output.logical_size.0);
             extent.1 = extent.1.max(output.logical_pos.1 + output.logical_size.1);
         }
@@ -115,22 +145,22 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
     ) {
         match event {
             zxdg_output_v1::Event::Name { name } => {
-                if let Some(output) = state.outputs.iter_mut().find(|o| o.id == *data) {
+                if let Some(output) = state.outputs.get_mut(*data) {
                     output.name = name.into();
                 }
             }
             zxdg_output_v1::Event::LogicalPosition { x, y } => {
-                if let Some(output) = state.outputs.iter_mut().find(|o| o.id == *data) {
+                if let Some(output) = state.outputs.get_mut(*data) {
                     output.logical_pos = (x, y);
                 }
             }
             zxdg_output_v1::Event::LogicalSize { width, height } => {
-                if let Some(output) = state.outputs.iter_mut().find(|o| o.id == *data) {
+                if let Some(output) = state.outputs.get_mut(*data) {
                     output.logical_size = (width, height);
                 }
             }
             zxdg_output_v1::Event::Done => {
-                if let Some(output) = state.outputs.iter_mut().find(|o| o.id == *data) {
+                if let Some(output) = state.outputs.get_mut(*data) {
                     if output.logical_size.0 < 0 {
                         output.logical_pos.0 += output.logical_size.0;
                         output.logical_size.0 *= -1;
@@ -162,14 +192,14 @@ impl Dispatch<WlOutput, u32> for WlxClient {
     ) {
         match event {
             wl_output::Event::Mode { width, height, .. } => {
-                if let Some(output) = state.outputs.iter_mut().find(|o| o.id == *data) {
+                if let Some(output) = state.outputs.get_mut(*data) {
                     output.size = (width, height);
                 }
             }
             wl_output::Event::Geometry {
                 model, transform, ..
             } => {
-                if let Some(output) = state.outputs.iter_mut().find(|o| o.id == *data) {
+                if let Some(output) = state.outputs.get_mut(*data) {
                     output.model = model.into();
                     output.transform = transform.into_result().unwrap_or(Transform::Normal);
                 }

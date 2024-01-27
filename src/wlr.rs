@@ -104,7 +104,7 @@ fn request_dmabuf_frame(
             let mut new_frame = DmabufFrame::default();
             new_frame.format.width = width;
             new_frame.format.height = height;
-            new_frame.format.fourcc = format;
+            new_frame.format.fourcc.value = format;
             new_frame.format.set_mod(mod_high, mod_low);
             new_frame.num_planes = num_objects as _;
             frame = Some(new_frame);

@@ -1,13 +1,16 @@
-use log::{warn,error};
-use std::{sync::{
-    mpsc::Sender,
-    Arc, Mutex,
-}, time::Duration};
+use log::{error, warn};
+use std::{
+    sync::{mpsc::Sender, Arc, Mutex},
+    time::Duration,
+};
 
 use once_cell::sync::Lazy;
 use rxscreen::monitor::Monitor;
 
-use crate::{frame::{WlxFrame, MemPtrFrame, FrameFormat, DRM_FORMAT_XRGB8888, MouseMeta}, WlxCapture};
+use crate::{
+    frame::{FrameFormat, MemPtrFrame, MouseMeta, WlxFrame, DRM_FORMAT_XRGB8888},
+    WlxCapture,
+};
 
 static MUTEX: Lazy<Arc<Mutex<()>>> = Lazy::new(|| Arc::new(Mutex::new(())));
 
@@ -40,7 +43,6 @@ impl XshmCapture {
             })
             .collect()
     }
-
 }
 
 impl WlxCapture for XshmCapture {
@@ -52,7 +54,7 @@ impl WlxCapture for XshmCapture {
         std::thread::spawn({
             let monitor = self.screen.monitor.clone();
             move || {
-                let Ok(lock) = MUTEX.lock() else { 
+                let Ok(lock) = MUTEX.lock() else {
                     error!("Scr {}: Failed to lock mutex", monitor.name());
                     return;
                 };
@@ -70,25 +72,30 @@ impl WlxCapture for XshmCapture {
                 loop {
                     match rx_cmd.try_iter().last() {
                         Some(_) => {
-                            let Ok(_lock) = MUTEX.lock() else { continue; };
+                            let Ok(_lock) = MUTEX.lock() else {
+                                continue;
+                            };
                             if let Ok(image) = shm.capture() {
-
-                                let frame = MemPtrFrame { 
+                                let frame = MemPtrFrame {
                                     format: FrameFormat {
                                         width: image.width() as _,
                                         height: image.height() as _,
-                                        fourcc: DRM_FORMAT_XRGB8888,
+                                        fourcc: DRM_FORMAT_XRGB8888.into(),
                                         modifier: 0,
-                                    }, 
+                                    },
                                     ptr: unsafe { image.as_ptr() as _ },
                                 };
 
                                 if tx_frame.send(WlxFrame::MemPtr(frame)).is_err() {
                                     break;
                                 }
-                                
-                                let Some(root_pos) = d.root_mouse_position() else { continue; };
-                                let Some((x,y)) = monitor.mouse_to_local(root_pos) else { continue; };
+
+                                let Some(root_pos) = d.root_mouse_position() else {
+                                    continue;
+                                };
+                                let Some((x, y)) = monitor.mouse_to_local(root_pos) else {
+                                    continue;
+                                };
 
                                 let mouse = MouseMeta {
                                     x: x as _,
@@ -99,7 +106,7 @@ impl WlxCapture for XshmCapture {
                                 }
                             }
                         }
-                        None => { 
+                        None => {
                             std::thread::sleep(sleep_duration);
                         }
                     }
@@ -117,4 +124,3 @@ impl WlxCapture for XshmCapture {
         }
     }
 }
-

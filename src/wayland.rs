@@ -67,12 +67,12 @@ impl WlxClient {
             default_output_name: "Unknown".into(),
         };
 
-        state.refrest_outputs();
+        state.refresh_outputs();
 
         Some(state)
     }
 
-    pub fn refrest_outputs(&mut self) -> bool {
+    pub fn refresh_outputs(&mut self) -> bool {
         let now = Instant::now();
         let mut changed = false;
 

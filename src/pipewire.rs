@@ -140,8 +140,8 @@ fn main_loop(
             let name = name.clone();
             move |stream, id, format, param| {
                 let Some(param) = param else {
-                return;
-            };
+                    return;
+                };
                 if id != ParamType::Format.as_raw() {
                     return;
                 }
@@ -374,7 +374,7 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
 }
 
 fn fourcc_to_spa(fourcc: FourCC) -> VideoFormat {
-    match fourcc {
+    match fourcc.value {
         DRM_FORMAT_ARGB8888 => VideoFormat::BGRA,
         DRM_FORMAT_ABGR8888 => VideoFormat::RGBA,
         DRM_FORMAT_XRGB8888 => VideoFormat::BGRx,
@@ -386,10 +386,10 @@ fn fourcc_to_spa(fourcc: FourCC) -> VideoFormat {
 #[allow(non_upper_case_globals)]
 fn spa_to_fourcc(spa: VideoFormat) -> FourCC {
     match spa {
-        VideoFormat::BGRA => DRM_FORMAT_ARGB8888,
-        VideoFormat::RGBA => DRM_FORMAT_ABGR8888,
-        VideoFormat::BGRx => DRM_FORMAT_XRGB8888,
-        VideoFormat::RGBx => DRM_FORMAT_XBGR8888,
+        VideoFormat::BGRA => DRM_FORMAT_ARGB8888.into(),
+        VideoFormat::RGBA => DRM_FORMAT_ABGR8888.into(),
+        VideoFormat::BGRx => DRM_FORMAT_XRGB8888.into(),
+        VideoFormat::RGBx => DRM_FORMAT_XBGR8888.into(),
         _ => panic!("Unsupported format"),
     }
 }

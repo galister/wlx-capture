@@ -12,6 +12,7 @@ license = "GPL-3.0"
 
 [features]
 default = ["wlr", "pipewire", "xshm"]
+egl = []
 wlr = ["wayland"]
 pipewire = ["wayland", "dep:ashpd", "dep:pipewire"]
 wayland = ["dep:smithay-client-toolkit", "dep:wayland-client", "dep:wayland-protocols"]

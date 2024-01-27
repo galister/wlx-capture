@@ -1,13 +1,48 @@
 use libc::close;
-use std::os::fd::RawFd;
+use std::{fmt::Display, os::fd::RawFd};
 
-pub type FourCC = u32;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FourCC {
+    pub value: u32,
+}
 
-pub const DRM_FORMAT_ARGB8888: FourCC = 0x34325241;
-pub const DRM_FORMAT_ABGR8888: FourCC = 0x34324241;
-pub const DRM_FORMAT_XRGB8888: FourCC = 0x34325258;
-pub const DRM_FORMAT_XBGR8888: FourCC = 0x34324258;
+impl PartialEq for FourCC {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
 
+impl From<u32> for FourCC {
+    fn from(value: u32) -> Self {
+        Self { value }
+    }
+}
+
+impl From<FourCC> for u32 {
+    fn from(fourcc: FourCC) -> Self {
+        fourcc.value
+    }
+}
+
+impl Display for FourCC {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for i in 0..4 {
+            if let Some(c) = char::from_u32((self.value >> (i * 8)) & 0xFF) {
+                write!(f, "{}", c)?
+            } else {
+                write!(f, "?")?
+            }
+        }
+        Ok(())
+    }
+}
+
+pub const DRM_FORMAT_ARGB8888: u32 = 0x34325241; // AR24
+pub const DRM_FORMAT_ABGR8888: u32 = 0x34324241; // AB24
+pub const DRM_FORMAT_XRGB8888: u32 = 0x34325258; // XR24
+pub const DRM_FORMAT_XBGR8888: u32 = 0x34324258; // XB24
+
+#[cfg(feature = "egl")]
 #[rustfmt::skip]
 const EGL_DMABUF_PLANE_ATTRS: [isize; 20] = [
 //  FD     Offset Stride ModLo  ModHi
@@ -65,6 +100,7 @@ pub struct DmabufFrame {
 }
 
 impl DmabufFrame {
+    #[cfg(feature = "egl")]
     /// Get the attributes for creating an EGLImage.
     /// Pacics if fd is None; check using `is_valid` first.
     pub fn get_egl_image_attribs(&self) -> Vec<isize> {
@@ -74,7 +110,7 @@ impl DmabufFrame {
             0x3056, // HEIGHT
             self.format.height as _,
             0x3271, // LINUX_DRM_FOURCC_EXT,
-            self.format.fourcc as _,
+            self.format.fourcc.value as _,
         ];
 
         for i in 0..self.num_planes {
@@ -99,9 +135,14 @@ impl DmabufFrame {
         vec
     }
 
-    /// Returns true if there's at least 1 valid fd.
+    /// Returns true if all planes have a valid file descriptor.
     pub fn is_valid(&self) -> bool {
-        self.planes[0].fd.is_some()
+        for i in 0..self.num_planes {
+            if self.planes[i].fd.is_none() {
+                return false;
+            }
+        }
+        true
     }
 
     /// Close the file descriptors of all planes.

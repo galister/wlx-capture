@@ -9,7 +9,7 @@ pub mod frame;
 pub mod wayland;
 
 #[cfg(feature = "wlr")]
-pub mod wlr;
+pub mod wlr_dmabuf;
 
 #[cfg(feature = "pipewire")]
 pub mod pipewire;

@@ -1,14 +1,10 @@
-use std::{
-    os::fd::IntoRawFd,
-    sync::mpsc::{self, SendError, Sender, SyncSender},
-    thread::JoinHandle,
-};
+use std::{os::fd::IntoRawFd, sync::mpsc, thread::JoinHandle};
 
 use smithay_client_toolkit::reexports::protocols_wlr::export_dmabuf::v1::client::zwlr_export_dmabuf_frame_v1::{self, ZwlrExportDmabufFrameV1};
 use wayland_client::{Connection, QueueHandle, Dispatch, Proxy};
 
 use crate::{
-    frame::{DmabufFrame, FramePlane, WlxFrame},
+    frame::{DmabufFrame, DrmFormat, FramePlane, WlxFrame},
     wayland::WlxClient,
     WlxCapture,
 };
@@ -19,7 +15,7 @@ pub struct WlrDmabufCapture {
     output_id: u32,
     wl: Option<Box<WlxClient>>,
     handle: Option<JoinHandle<Box<WlxClient>>>,
-    sender: Option<Sender<WlxFrame>>,
+    sender: Option<mpsc::SyncSender<WlxFrame>>,
 }
 
 impl WlrDmabufCapture {
@@ -34,10 +30,10 @@ impl WlrDmabufCapture {
 }
 
 impl WlxCapture for WlrDmabufCapture {
-    fn init(&mut self) -> std::sync::mpsc::Receiver<WlxFrame> {
+    fn init(&mut self, _: &[DrmFormat]) -> std::sync::mpsc::Receiver<WlxFrame> {
         debug_assert!(self.wl.is_some());
 
-        let (tx, rx) = std::sync::mpsc::channel::<WlxFrame>();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<WlxFrame>(2);
         self.sender = Some(tx);
         rx
     }
@@ -72,7 +68,7 @@ impl WlxCapture for WlrDmabufCapture {
 fn request_dmabuf_frame(
     client: Box<WlxClient>,
     output_id: u32,
-    sender: Sender<WlxFrame>,
+    sender: mpsc::SyncSender<WlxFrame>,
 ) -> Box<WlxClient> {
     let Some(dmabuf_manager) = client.maybe_wlr_dmabuf_mgr.as_ref() else {
         return client;
@@ -82,7 +78,8 @@ fn request_dmabuf_frame(
         return client;
     };
 
-    let (tx, rx) = mpsc::sync_channel::<zwlr_export_dmabuf_frame_v1::Event>(1024);
+    let (tx, rx) = mpsc::sync_channel::<zwlr_export_dmabuf_frame_v1::Event>(16);
+    let name = output.name.clone();
 
     let _ = dmabuf_manager.capture_output(1, &output.wl_output, &client.queue_handle, tx.clone());
 
@@ -130,7 +127,14 @@ fn request_dmabuf_frame(
                 return;
             };
             debug!("DMA-Buf frame captured");
-            let _ = sender.send(WlxFrame::Dmabuf(frame));
+            let frame = WlxFrame::Dmabuf(frame);
+            match sender.try_send(frame) {
+                Ok(_) => (),
+                Err(mpsc::TrySendError::Full(_)) => (),
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    log::warn!("{}: disconnected", &name);
+                }
+            }
         }
         zwlr_export_dmabuf_frame_v1::Event::Cancel { .. } => {
             warn!("DMA-Buf frame capture cancelled");
@@ -141,14 +145,14 @@ fn request_dmabuf_frame(
     client
 }
 
-impl Dispatch<ZwlrExportDmabufFrameV1, SyncSender<zwlr_export_dmabuf_frame_v1::Event>>
+impl Dispatch<ZwlrExportDmabufFrameV1, mpsc::SyncSender<zwlr_export_dmabuf_frame_v1::Event>>
     for WlxClient
 {
     fn event(
         _state: &mut Self,
         proxy: &ZwlrExportDmabufFrameV1,
         event: <ZwlrExportDmabufFrameV1 as Proxy>::Event,
-        data: &SyncSender<zwlr_export_dmabuf_frame_v1::Event>,
+        data: &mpsc::SyncSender<zwlr_export_dmabuf_frame_v1::Event>,
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
@@ -162,7 +166,7 @@ impl Dispatch<ZwlrExportDmabufFrameV1, SyncSender<zwlr_export_dmabuf_frame_v1::E
 
         let _ = data.send(event).or_else(|err| {
             warn!("Failed to send DMA-Buf frame event: {}", err);
-            Ok::<(), SendError<zwlr_export_dmabuf_frame_v1::Event>>(())
+            Ok::<(), mpsc::SendError<zwlr_export_dmabuf_frame_v1::Event>>(())
         });
     }
 }

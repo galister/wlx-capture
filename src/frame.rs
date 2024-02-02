@@ -86,7 +86,7 @@ pub struct FramePlane {
     pub stride: i32,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DrmFormat {
     pub fourcc: FourCC,
     pub modifiers: Vec<u64>,

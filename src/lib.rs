@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::sync::mpsc::Receiver;
 
-use frame::WlxFrame;
+use frame::{DrmFormat, WlxFrame};
 
 pub mod frame;
 
@@ -18,7 +18,7 @@ pub mod pipewire;
 pub mod xshm;
 
 pub trait WlxCapture {
-    fn init(&mut self) -> Receiver<WlxFrame>;
+    fn init(&mut self, dmabuf_formats: &[DrmFormat]) -> Receiver<WlxFrame>;
     fn pause(&mut self);
     fn resume(&mut self);
     fn request_new_frame(&mut self);

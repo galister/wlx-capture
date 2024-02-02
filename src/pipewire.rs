@@ -1,6 +1,4 @@
 use std::sync::mpsc;
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -24,6 +22,7 @@ use pw::spa::utils::Choice;
 use pw::spa::utils::ChoiceEnum;
 use pw::spa::utils::ChoiceFlags;
 use pw::stream::{Stream, StreamFlags};
+use pw::EventSource;
 use pw::{Context, Error, MainLoop};
 
 use crate::frame::DrmFormat;
@@ -70,8 +69,32 @@ struct StreamData {
     stream: Option<Stream>,
 }
 
+struct PwControl<'a> {
+    event_handle: EventSource<'a>,
+    sender: mpsc::SyncSender<PwChangeRequest>,
+}
+
+impl PwControl<'_> {
+    fn pause(&self) {
+        let _ = self.sender.try_send(PwChangeRequest::Pause);
+    }
+    fn resume(&self) {
+        let _ = self.sender.try_send(PwChangeRequest::Resume);
+    }
+    fn stop(&self) {
+        let _ = self.sender.try_send(PwChangeRequest::Stop);
+    }
+}
+
+pub enum PwChangeRequest {
+    Pause,
+    Resume,
+    Stop,
+}
+
 pub struct PipewireCapture {
     name: Arc<str>,
+    tx_ctrl: Option<mpsc::SyncSender<PwChangeRequest>>,
     node_id: u32,
     fps: u32,
     handle: Option<JoinHandle<Result<(), Error>>>,
@@ -81,6 +104,7 @@ impl PipewireCapture {
     pub fn new(name: Arc<str>, node_id: u32, fps: u32) -> Self {
         PipewireCapture {
             name,
+            tx_ctrl: None,
             node_id,
             fps,
             handle: None,
@@ -89,21 +113,49 @@ impl PipewireCapture {
 }
 
 impl WlxCapture for PipewireCapture {
-    fn init(&mut self) -> Receiver<WlxFrame> {
-        let (tx, rx) = mpsc::channel();
+    fn init(&mut self, dmabuf_formats: &[DrmFormat]) -> mpsc::Receiver<WlxFrame> {
+        let (tx_frame, rx_frame) = mpsc::sync_channel(2);
+        let (tx_ctrl, rx_ctrl) = mpsc::sync_channel(16);
+
+        self.tx_ctrl = Some(tx_ctrl);
 
         self.handle = Some(std::thread::spawn({
             let name = self.name.clone();
             let node_id = self.node_id;
             let fps = self.fps;
+            let formats = dmabuf_formats.to_vec();
 
-            move || main_loop(name, node_id, fps, vec![], tx) // TODO dmabuf_formats
+            move || main_loop(name, node_id, fps, formats, tx_frame, rx_ctrl)
         }));
 
-        rx
+        rx_frame
     }
-    fn pause(&mut self) {}
-    fn resume(&mut self) {}
+    fn pause(&mut self) {
+        if let Some(tx_ctrl) = &self.tx_ctrl {
+            match tx_ctrl.try_send(PwChangeRequest::Pause) {
+                Ok(_) => (),
+                Err(mpsc::TrySendError::Full(_)) => {
+                    warn!("{}: control channel full, cannot pause", &self.name);
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    warn!("{}: disconnected, stopping stream", &self.name);
+                }
+            }
+        }
+    }
+    fn resume(&mut self) {
+        if let Some(tx_ctrl) = &self.tx_ctrl {
+            match tx_ctrl.try_send(PwChangeRequest::Resume) {
+                Ok(_) => (),
+                Err(mpsc::TrySendError::Full(_)) => {
+                    error!("{}: control channel full, cannot resume", &self.name);
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    warn!("{}: disconnected, stopping stream", &self.name);
+                }
+            }
+        }
+    }
     fn request_new_frame(&mut self) {}
 }
 
@@ -112,7 +164,8 @@ fn main_loop(
     node_id: u32,
     fps: u32,
     dmabuf_formats: Vec<DrmFormat>,
-    sender: Sender<WlxFrame>,
+    sender: mpsc::SyncSender<WlxFrame>,
+    receiver: mpsc::Receiver<PwChangeRequest>,
 ) -> Result<(), Error> {
     let main_loop = MainLoop::new()?;
     let context = Context::new(&main_loop)?;
@@ -198,9 +251,15 @@ fn main_loop(
                             };
                             dmabuf.planes[..planes.len()].copy_from_slice(&planes[..planes.len()]);
 
-                            let _ = sender
-                                .send(WlxFrame::Dmabuf(dmabuf))
-                                .or_else(|_| stream.disconnect());
+                            let frame = WlxFrame::Dmabuf(dmabuf);
+                            match sender.try_send(frame) {
+                                Ok(_) => (),
+                                Err(mpsc::TrySendError::Full(_)) => (),
+                                Err(mpsc::TrySendError::Disconnected(_)) => {
+                                    log::warn!("{}: disconnected, stopping stream", &name);
+                                    let _ = stream.disconnect();
+                                }
+                            }
                         }
                         DataType::MemFd => {
                             let memfd = MemFdFrame {
@@ -211,18 +270,32 @@ fn main_loop(
                                     stride: datas[0].chunk().stride(),
                                 },
                             };
-                            let _ = sender
-                                .send(WlxFrame::MemFd(memfd))
-                                .or_else(|_| stream.disconnect());
+
+                            let frame = WlxFrame::MemFd(memfd);
+                            match sender.try_send(frame) {
+                                Ok(_) => (),
+                                Err(mpsc::TrySendError::Full(_)) => (),
+                                Err(mpsc::TrySendError::Disconnected(_)) => {
+                                    log::warn!("{}: disconnected, stopping stream", &name);
+                                    let _ = stream.disconnect();
+                                }
+                            }
                         }
                         DataType::MemPtr => {
                             let memptr = MemPtrFrame {
                                 format: *format,
                                 ptr: datas[0].as_raw().data as _,
                             };
-                            let _ = sender
-                                .send(WlxFrame::MemPtr(memptr))
-                                .or_else(|_| stream.disconnect());
+
+                            let frame = WlxFrame::MemPtr(memptr);
+                            match sender.try_send(frame) {
+                                Ok(_) => (),
+                                Err(mpsc::TrySendError::Full(_)) => (),
+                                Err(mpsc::TrySendError::Disconnected(_)) => {
+                                    log::warn!("{}: disconnected, stopping stream", &name);
+                                    let _ = stream.disconnect();
+                                }
+                            }
                         }
                         _ => panic!("Unknown data type"),
                     }
@@ -248,6 +321,29 @@ fn main_loop(
         StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
         params.as_mut_slice(),
     )?;
+
+    let trigger = main_loop.add_timer({
+        let name = name.clone();
+        move |_| {
+            receiver.try_iter().for_each(|req| match req {
+                PwChangeRequest::Pause => {
+                    let _ = stream.set_active(false);
+                    info!("{}: paused stream", &name);
+                }
+                PwChangeRequest::Resume => {
+                    let _ = stream.set_active(true);
+                    info!("{}: resumed stream", &name);
+                }
+                PwChangeRequest::Stop => {
+                    let _ = stream.disconnect();
+                    info!("{}: stopping stream", &name);
+                }
+            })
+        }
+    });
+
+    let interval = std::time::Duration::from_millis(250);
+    trigger.update_timer(Some(interval), Some(interval));
 
     main_loop.run();
     warn!("{}: pipewire loop exited", &name);

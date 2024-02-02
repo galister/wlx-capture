@@ -328,11 +328,9 @@ fn main_loop(
             receiver.try_iter().for_each(|req| match req {
                 PwChangeRequest::Pause => {
                     let _ = stream.set_active(false);
-                    info!("{}: paused stream", &name);
                 }
                 PwChangeRequest::Resume => {
                     let _ = stream.set_active(true);
-                    info!("{}: resumed stream", &name);
                 }
                 PwChangeRequest::Stop => {
                     let _ = stream.disconnect();

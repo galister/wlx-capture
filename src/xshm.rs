@@ -34,7 +34,8 @@ impl XshmCapture {
     }
 
     pub fn get_monitors() -> Vec<Arc<XshmScreen>> {
-        let d = rxscreen::Display::new(":0.0").unwrap();
+        let display = env::var("DISPLAY").expect("DISPLAY not set");
+        let d = rxscreen::Display::new(display).unwrap();
         d.monitors()
             .into_iter()
             .enumerate()

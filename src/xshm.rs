@@ -15,12 +15,12 @@ use crate::{
 static MUTEX: Lazy<Arc<Mutex<()>>> = Lazy::new(|| Arc::new(Mutex::new(())));
 
 pub struct XshmScreen {
-    name: Arc<str>,
-    monitor: Monitor,
+    pub name: Arc<str>,
+    pub monitor: Monitor,
 }
 
 pub struct XshmCapture {
-    screen: Arc<XshmScreen>,
+    pub screen: Arc<XshmScreen>,
     sender: Option<mpsc::SyncSender<()>>,
 }
 

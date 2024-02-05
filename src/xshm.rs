@@ -25,21 +25,23 @@ pub struct XshmCapture {
 }
 
 impl XshmCapture {
-    pub fn new(screen: XshmScreen) -> Option<Self> {
-        Some(Self {
-            screen: Arc::new(screen),
+    pub fn new(screen: Arc<XshmScreen>) -> Self {
+        Self {
+            screen,
             sender: None,
-        })
+        }
     }
 
-    pub fn get_monitors() -> Vec<XshmScreen> {
+    pub fn get_monitors() -> Vec<Arc<XshmScreen>> {
         let d = rxscreen::Display::new(":0.0").unwrap();
         d.monitors()
             .into_iter()
             .enumerate()
-            .map(|x| XshmScreen {
-                name: format!("Scr {}", x.1.name()).into(),
-                monitor: x.1,
+            .map(|x| {
+                Arc::new(XshmScreen {
+                    name: format!("Scr {}", x.1.name()).into(),
+                    monitor: x.1,
+                })
             })
             .collect()
     }
@@ -86,19 +88,6 @@ impl WlxCapture for XshmCapture {
                                     ptr: unsafe { image.as_ptr() as _ },
                                 };
 
-                                let frame = WlxFrame::MemPtr(memptr_frame);
-                                match tx_frame.try_send(frame) {
-                                    Ok(_) => (),
-                                    Err(mpsc::TrySendError::Full(_)) => (),
-                                    Err(mpsc::TrySendError::Disconnected(_)) => {
-                                        log::warn!(
-                                            "{}: disconnected, stopping capture thread",
-                                            &monitor.name(),
-                                        );
-                                        break;
-                                    }
-                                }
-
                                 let Some(root_pos) = d.root_mouse_position() else {
                                     continue;
                                 };
@@ -112,6 +101,19 @@ impl WlxCapture for XshmCapture {
                                 };
                                 let frame = WlxFrame::Mouse(mouse);
 
+                                match tx_frame.try_send(frame) {
+                                    Ok(_) => (),
+                                    Err(mpsc::TrySendError::Full(_)) => (),
+                                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                                        log::warn!(
+                                            "{}: disconnected, stopping capture thread",
+                                            &monitor.name(),
+                                        );
+                                        break;
+                                    }
+                                }
+
+                                let frame = WlxFrame::MemPtr(memptr_frame);
                                 match tx_frame.try_send(frame) {
                                     Ok(_) => (),
                                     Err(mpsc::TrySendError::Full(_)) => (),

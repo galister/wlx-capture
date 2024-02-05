@@ -101,8 +101,8 @@ impl WlxCapture for XshmCapture {
                                 };
 
                                 let mouse = MouseMeta {
-                                    x: x as _,
-                                    y: y as _,
+                                    x: (x as f32) / (image.width() as f32),
+                                    y: (y as f32) / (image.height() as f32),
                                 };
                                 let frame = WlxFrame::Mouse(mouse);
 

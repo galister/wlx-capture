@@ -178,6 +178,6 @@ pub struct MemPtrFrame {
 
 #[derive(Default)]
 pub struct MouseMeta {
-    pub x: i32,
-    pub y: i32,
+    pub x: f32,
+    pub y: f32,
 }

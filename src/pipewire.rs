@@ -36,7 +36,14 @@ use crate::frame::DRM_FORMAT_XRGB8888;
 use crate::frame::{DmabufFrame, FramePlane, MemFdFrame, MemPtrFrame};
 use crate::WlxCapture;
 
-pub async fn pipewire_select_screen(token: Option<&str>) -> Result<u32, ashpd::Error> {
+pub struct PipewireSelectScreenResult {
+    pub node_id: u32,
+    pub restore_token: Option<String>,
+}
+
+pub async fn pipewire_select_screen(
+    token: Option<&str>,
+) -> Result<PipewireSelectScreenResult, ashpd::Error> {
     let proxy = Screencast::new().await?;
     let session = proxy.create_session().await?;
 
@@ -57,7 +64,10 @@ pub async fn pipewire_select_screen(token: Option<&str>) -> Result<u32, ashpd::E
         .response()?;
 
     if let Some(stream) = response.streams().first() {
-        return Ok(stream.pipe_wire_node_id());
+        return Ok(PipewireSelectScreenResult {
+            node_id: stream.pipe_wire_node_id(),
+            restore_token: response.restore_token().map(String::from),
+        });
     }
 
     Err(ashpd::Error::NoResponse)

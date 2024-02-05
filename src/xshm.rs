@@ -78,6 +78,7 @@ impl WlxCapture for XshmCapture {
                                 continue;
                             };
                             if let Ok(image) = shm.capture() {
+                                let size = unsafe { image.as_bytes().len() };
                                 let memptr_frame = MemPtrFrame {
                                     format: FrameFormat {
                                         width: image.width() as _,
@@ -86,6 +87,7 @@ impl WlxCapture for XshmCapture {
                                         modifier: 0,
                                     },
                                     ptr: unsafe { image.as_ptr() as _ },
+                                    size,
                                 };
 
                                 let Some(root_pos) = d.root_mouse_position() else {

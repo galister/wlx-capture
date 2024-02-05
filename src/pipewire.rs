@@ -285,6 +285,7 @@ fn main_loop(
                             let memptr = MemPtrFrame {
                                 format: *format,
                                 ptr: datas[0].as_raw().data as _,
+                                size: datas[0].chunk().size() as _,
                             };
 
                             let frame = WlxFrame::MemPtr(memptr);

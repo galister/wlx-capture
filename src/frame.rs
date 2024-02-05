@@ -173,6 +173,7 @@ pub struct MemFdFrame {
 pub struct MemPtrFrame {
     pub format: FrameFormat,
     pub ptr: usize,
+    pub size: usize,
 }
 
 #[derive(Default)]

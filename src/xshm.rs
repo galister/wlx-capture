@@ -1,5 +1,6 @@
 use log::{error, warn};
 use std::{
+    env,
     sync::{mpsc, Arc, Mutex},
     time::Duration,
 };
@@ -60,7 +61,8 @@ impl WlxCapture for XshmCapture {
                     error!("Scr {}: Failed to lock mutex", monitor.name());
                     return;
                 };
-                let Ok(d) = rxscreen::Display::new(":0.0") else {
+                let display = env::var("DISPLAY").expect("DISPLAY not set");
+                let Ok(d) = rxscreen::Display::new(display) else {
                     error!("Scr {}: Failed to open display", monitor.name());
                     return;
                 };

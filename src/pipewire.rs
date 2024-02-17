@@ -218,7 +218,13 @@ fn main_loop(
                 format.fourcc = spa_to_fourcc(info.format());
                 format.modifier = info.modifier();
 
-                info!("{}: got video format:", &name);
+                let kind = if format.modifier != 0 {
+                    "DMA-buf"
+                } else {
+                    "SHM"
+                };
+
+                info!("{}: got {} video format:", &name, &kind);
                 info!("  format: {} ({:?})", info.format().as_raw(), info.format());
                 info!("  size: {}x{}", info.size().width, info.size().height);
                 info!("  modifier: {}", info.modifier());

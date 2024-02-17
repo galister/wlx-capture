@@ -221,6 +221,7 @@ fn main_loop(
                 info!("{}: got video format:", &name);
                 info!("  format: {} ({:?})", info.format().as_raw(), info.format());
                 info!("  size: {}x{}", info.size().width, info.size().height);
+                info!("  modifier: {}", info.modifier());
                 let params = obj_to_bytes(get_buffer_params());
                 if let Err(e) = stream.update_params(&mut [params.as_ptr() as _]) {
                     error!("{}: failed to update params: {}", &name, e);

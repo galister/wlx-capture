@@ -1,4 +1,3 @@
-use libc::close;
 use std::{fmt::Display, os::fd::RawFd};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -143,23 +142,6 @@ impl DmabufFrame {
             }
         }
         true
-    }
-
-    /// Close the file descriptors of all planes.
-    /// Also called on drop.
-    pub fn close(&mut self) {
-        for i in 0..self.num_planes {
-            if let Some(fd) = self.planes[i].fd {
-                unsafe { close(fd) };
-                self.planes[i].fd = None;
-            }
-        }
-    }
-}
-
-impl Drop for DmabufFrame {
-    fn drop(&mut self) {
-        self.close();
     }
 }
 

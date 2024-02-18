@@ -1,6 +1,7 @@
 use log::{error, warn};
 use std::{
     env,
+    error::Error,
     sync::{mpsc, Arc, Mutex},
     time::Duration,
 };
@@ -33,10 +34,12 @@ impl XshmCapture {
         }
     }
 
-    pub fn get_monitors() -> Vec<Arc<XshmScreen>> {
-        let display = env::var("DISPLAY").expect("DISPLAY not set");
-        let d = rxscreen::Display::new(display).unwrap();
-        d.monitors()
+    pub fn get_monitors() -> Result<Vec<Arc<XshmScreen>>, Box<dyn Error>> {
+        let display = env::var("DISPLAY")?;
+        let Ok(d) = rxscreen::Display::new(display) else {
+            return Err("X11: Failed to open display".into());
+        };
+        Ok(d.monitors()
             .into_iter()
             .enumerate()
             .map(|x| {
@@ -45,7 +48,7 @@ impl XshmCapture {
                     monitor: x.1,
                 })
             })
-            .collect()
+            .collect())
     }
 }
 

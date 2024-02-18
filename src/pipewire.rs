@@ -15,6 +15,7 @@ use pw::spa::data::DataType;
 use pw::spa::param::video::VideoFormat;
 use pw::spa::param::video::VideoInfoRaw;
 use pw::spa::param::ParamType;
+use pw::spa::pod::serialize::GenError;
 use pw::spa::pod::ChoiceValue;
 use pw::spa::pod::Pod;
 use pw::spa::pod::{Object, Property, PropertyFlags, Value};
@@ -228,9 +229,10 @@ fn main_loop(
                 info!("  format: {} ({:?})", info.format().as_raw(), info.format());
                 info!("  size: {}x{}", info.size().width, info.size().height);
                 info!("  modifier: {}", info.modifier());
-                let params = obj_to_bytes(get_buffer_params());
-                if let Err(e) = stream.update_params(&mut [params.as_ptr() as _]) {
-                    error!("{}: failed to update params: {}", &name, e);
+                if let Ok(params) = obj_to_bytes(get_buffer_params()) {
+                    if let Err(e) = stream.update_params(&mut [params.as_ptr() as _]) {
+                        error!("{}: failed to update params: {}", &name, e);
+                    }
                 }
             }
         })
@@ -324,13 +326,15 @@ fn main_loop(
 
     let mut format_params: Vec<Vec<u8>> = dmabuf_formats
         .iter()
-        .map(|f| obj_to_bytes(get_format_params(Some(f), fps)))
+        .filter_map(|f| obj_to_bytes(get_format_params(Some(f), fps)).ok())
         .collect();
-    format_params.push(obj_to_bytes(get_format_params(None, fps)));
+
+    format_params.push(obj_to_bytes(get_format_params(None, fps)).unwrap()); // safe unwrap: known
+                                                                             // good values
 
     let mut params: Vec<&Pod> = format_params
         .iter()
-        .map(|bytes| Pod::from_bytes(bytes).unwrap())
+        .filter_map(|bytes| Pod::from_bytes(bytes))
         .collect();
 
     stream.connect(
@@ -366,14 +370,13 @@ fn main_loop(
     Ok::<(), Error>(())
 }
 
-fn obj_to_bytes(obj: pw::spa::pod::Object) -> Vec<u8> {
-    pw::spa::pod::serialize::PodSerializer::serialize(
+fn obj_to_bytes(obj: pw::spa::pod::Object) -> Result<Vec<u8>, GenError> {
+    Ok(pw::spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
         &pw::spa::pod::Value::Object(obj),
-    )
-    .unwrap()
+    )?
     .0
-    .into_inner()
+    .into_inner())
 }
 
 fn get_buffer_params() -> Object {

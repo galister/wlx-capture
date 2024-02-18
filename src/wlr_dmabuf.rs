@@ -42,7 +42,7 @@ impl WlxCapture for WlrDmabufCapture {
     fn request_new_frame(&mut self) {
         if let Some(handle) = self.handle.take() {
             if handle.is_finished() {
-                self.wl = Some(handle.join().unwrap());
+                self.wl = Some(handle.join().unwrap()); // safe to unwrap because we checked is_finished
             } else {
                 self.handle = Some(handle);
                 return;

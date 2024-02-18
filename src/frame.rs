@@ -115,7 +115,7 @@ impl DmabufFrame {
         for i in 0..self.num_planes {
             let mut a = i * 5usize;
             vec.push(EGL_DMABUF_PLANE_ATTRS[a]);
-            vec.push(self.planes[i].fd.unwrap() as _);
+            vec.push(self.planes[i].fd.unwrap() as _); // safe to unwrap due to contract
             a += 1;
             vec.push(EGL_DMABUF_PLANE_ATTRS[a]);
             vec.push(self.planes[i].offset as _);

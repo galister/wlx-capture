@@ -20,6 +20,7 @@ pub mod xshm;
 
 pub trait WlxCapture {
     fn init(&mut self, dmabuf_formats: &[DrmFormat]);
+    fn ready(&self) -> bool;
     fn receive(&mut self) -> Option<WlxFrame>;
     fn pause(&mut self);
     fn resume(&mut self);

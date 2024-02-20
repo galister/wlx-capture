@@ -98,7 +98,7 @@ fn request_screencopy_frame(
         return client;
     };
 
-    let Some(output) = client.outputs.get(&output_id) else {
+    let Some(output) = client.outputs.get(output_id) else {
         return client;
     };
 

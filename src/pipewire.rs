@@ -379,7 +379,7 @@ fn main_loop(
                     let _ = stream.set_active(true);
                 }
                 PwChangeRequest::Stop => {
-                    let _ = main_loop.quit();
+                    main_loop.quit();
                     info!("{}: stopping pipewire loop", &name);
                 }
             })

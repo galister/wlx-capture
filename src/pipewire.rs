@@ -23,7 +23,6 @@ use pw::spa::utils::Choice;
 use pw::spa::utils::ChoiceEnum;
 use pw::spa::utils::ChoiceFlags;
 use pw::stream::{Stream, StreamFlags};
-use pw::EventSource;
 use pw::{Context, Error, MainLoop};
 
 use crate::frame::DrmFormat;
@@ -80,23 +79,6 @@ struct StreamData {
     stream: Option<Stream>,
 }
 
-struct PwControl<'a> {
-    event_handle: EventSource<'a>,
-    sender: mpsc::SyncSender<PwChangeRequest>,
-}
-
-impl PwControl<'_> {
-    fn pause(&self) {
-        let _ = self.sender.try_send(PwChangeRequest::Pause);
-    }
-    fn resume(&self) {
-        let _ = self.sender.try_send(PwChangeRequest::Resume);
-    }
-    fn stop(&self) {
-        let _ = self.sender.try_send(PwChangeRequest::Stop);
-    }
-}
-
 pub enum PwChangeRequest {
     Pause,
     Resume,
@@ -119,6 +101,17 @@ impl PipewireCapture {
             node_id,
             fps,
             handle: None,
+        }
+    }
+}
+
+impl Drop for PipewireCapture {
+    fn drop(&mut self) {
+        if let Some(tx_ctrl) = &self.tx_ctrl {
+            let _ = tx_ctrl.send(PwChangeRequest::Stop);
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
         }
     }
 }
@@ -346,6 +339,7 @@ fn main_loop(
 
     let trigger = main_loop.add_timer({
         let name = name.clone();
+        let main_loop = main_loop.clone();
         move |_| {
             receiver.try_iter().for_each(|req| match req {
                 PwChangeRequest::Pause => {
@@ -355,8 +349,8 @@ fn main_loop(
                     let _ = stream.set_active(true);
                 }
                 PwChangeRequest::Stop => {
-                    let _ = stream.disconnect();
-                    info!("{}: stopping stream", &name);
+                    let _ = main_loop.quit();
+                    info!("{}: stopping pipewire loop", &name);
                 }
             })
         }
@@ -366,7 +360,7 @@ fn main_loop(
     trigger.update_timer(Some(interval), Some(interval));
 
     main_loop.run();
-    warn!("{}: pipewire loop exited", &name);
+    info!("{}: pipewire loop exited", &name);
     Ok::<(), Error>(())
 }
 

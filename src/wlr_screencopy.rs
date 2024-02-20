@@ -45,6 +45,18 @@ pub struct WlrScreencopyCapture {
     receiver: Option<mpsc::Receiver<WlxFrame>>,
 }
 
+impl WlrScreencopyCapture {
+    pub fn new(wl: WlxClient, output_id: u32) -> Self {
+        Self {
+            output_id,
+            wl: Some(Box::new(wl)),
+            handle: None,
+            sender: None,
+            receiver: None,
+        }
+    }
+}
+
 impl WlxCapture for WlrScreencopyCapture {
     fn init(&mut self, _: &[DrmFormat]) {
         debug_assert!(self.wl.is_some());

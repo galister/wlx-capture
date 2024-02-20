@@ -43,18 +43,39 @@ pub struct PipewireSelectScreenResult {
 
 pub async fn pipewire_select_screen(
     token: Option<&str>,
+    embed_mouse: bool,
+    screens_only: bool,
+    persist: bool,
 ) -> Result<PipewireSelectScreenResult, ashpd::Error> {
     let proxy = Screencast::new().await?;
     let session = proxy.create_session().await?;
 
+    let cursor_mode = if embed_mouse {
+        CursorMode::Embedded
+    } else {
+        CursorMode::Hidden
+    };
+
+    let source_type = if screens_only {
+        SourceType::Monitor.into()
+    } else {
+        SourceType::Monitor | SourceType::Window | SourceType::Virtual
+    };
+
+    let persist_mode = if persist {
+        PersistMode::ExplicitlyRevoked
+    } else {
+        PersistMode::DoNot
+    };
+
     proxy
         .select_sources(
             &session,
-            CursorMode::Embedded,
-            SourceType::Monitor | SourceType::Window,
+            cursor_mode,
+            source_type,
             false,
             token,
-            PersistMode::ExplicitlyRevoked,
+            persist_mode,
         )
         .await?;
 
@@ -88,6 +109,7 @@ pub enum PwChangeRequest {
 pub struct PipewireCapture {
     name: Arc<str>,
     tx_ctrl: Option<mpsc::SyncSender<PwChangeRequest>>,
+    rx_frame: Option<mpsc::Receiver<WlxFrame>>,
     node_id: u32,
     fps: u32,
     handle: Option<JoinHandle<Result<(), Error>>>,
@@ -98,6 +120,7 @@ impl PipewireCapture {
         PipewireCapture {
             name,
             tx_ctrl: None,
+            rx_frame: None,
             node_id,
             fps,
             handle: None,
@@ -117,11 +140,12 @@ impl Drop for PipewireCapture {
 }
 
 impl WlxCapture for PipewireCapture {
-    fn init(&mut self, dmabuf_formats: &[DrmFormat]) -> mpsc::Receiver<WlxFrame> {
+    fn init(&mut self, dmabuf_formats: &[DrmFormat]) {
         let (tx_frame, rx_frame) = mpsc::sync_channel(2);
         let (tx_ctrl, rx_ctrl) = mpsc::sync_channel(16);
 
         self.tx_ctrl = Some(tx_ctrl);
+        self.rx_frame = Some(rx_frame);
 
         self.handle = Some(std::thread::spawn({
             let name = self.name.clone();
@@ -131,8 +155,12 @@ impl WlxCapture for PipewireCapture {
 
             move || main_loop(name, node_id, fps, formats, tx_frame, rx_ctrl)
         }));
-
-        rx_frame
+    }
+    fn receive(&mut self) -> Option<WlxFrame> {
+        if let Some(rx) = self.rx_frame.as_ref() {
+            return rx.try_iter().last();
+        }
+        None
     }
     fn pause(&mut self) {
         if let Some(tx_ctrl) = &self.tx_ctrl {
@@ -159,6 +187,7 @@ impl WlxCapture for PipewireCapture {
                 }
             }
         }
+        self.receive(); // clear old frames
     }
     fn request_new_frame(&mut self) {}
 }
@@ -298,6 +327,7 @@ fn main_loop(
                                 format: *format,
                                 ptr: datas[0].as_raw().data as _,
                                 size: datas[0].chunk().size() as _,
+                                mouse: None,
                             };
 
                             let frame = WlxFrame::MemPtr(memptr);

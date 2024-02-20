@@ -16,6 +16,7 @@ pub struct WlrDmabufCapture {
     wl: Option<Box<WlxClient>>,
     handle: Option<JoinHandle<Box<WlxClient>>>,
     sender: Option<mpsc::SyncSender<WlxFrame>>,
+    receiver: Option<mpsc::Receiver<WlxFrame>>,
 }
 
 impl WlrDmabufCapture {
@@ -25,20 +26,29 @@ impl WlrDmabufCapture {
             wl: Some(Box::new(wl)),
             handle: None,
             sender: None,
+            receiver: None,
         }
     }
 }
 
 impl WlxCapture for WlrDmabufCapture {
-    fn init(&mut self, _: &[DrmFormat]) -> std::sync::mpsc::Receiver<WlxFrame> {
+    fn init(&mut self, _: &[DrmFormat]) {
         debug_assert!(self.wl.is_some());
 
         let (tx, rx) = std::sync::mpsc::sync_channel::<WlxFrame>(2);
         self.sender = Some(tx);
-        rx
+        self.receiver = Some(rx);
+    }
+    fn receive(&mut self) -> Option<WlxFrame> {
+        if let Some(rx) = self.receiver.as_ref() {
+            return rx.try_iter().last();
+        }
+        None
     }
     fn pause(&mut self) {}
-    fn resume(&mut self) {}
+    fn resume(&mut self) {
+        self.receive(); // clear old frames
+    }
     fn request_new_frame(&mut self) {
         if let Some(handle) = self.handle.take() {
             if handle.is_finished() {

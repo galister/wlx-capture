@@ -1,6 +1,4 @@
 #![allow(dead_code)]
-use std::sync::mpsc::Receiver;
-
 use frame::{DrmFormat, WlxFrame};
 
 pub mod frame;
@@ -11,6 +9,9 @@ pub mod wayland;
 #[cfg(feature = "wlr")]
 pub mod wlr_dmabuf;
 
+#[cfg(feature = "wlr")]
+pub mod wlr_screencopy;
+
 #[cfg(feature = "pipewire")]
 pub mod pipewire;
 
@@ -18,7 +19,8 @@ pub mod pipewire;
 pub mod xshm;
 
 pub trait WlxCapture {
-    fn init(&mut self, dmabuf_formats: &[DrmFormat]) -> Receiver<WlxFrame>;
+    fn init(&mut self, dmabuf_formats: &[DrmFormat]);
+    fn receive(&mut self) -> Option<WlxFrame>;
     fn pause(&mut self);
     fn resume(&mut self);
     fn request_new_frame(&mut self);

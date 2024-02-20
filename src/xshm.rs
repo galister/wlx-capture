@@ -24,6 +24,7 @@ pub struct XshmScreen {
 pub struct XshmCapture {
     pub screen: Arc<XshmScreen>,
     sender: Option<mpsc::SyncSender<()>>,
+    receiver: Option<mpsc::Receiver<WlxFrame>>,
 }
 
 impl XshmCapture {
@@ -31,6 +32,7 @@ impl XshmCapture {
         Self {
             screen,
             sender: None,
+            receiver: None,
         }
     }
 
@@ -53,10 +55,11 @@ impl XshmCapture {
 }
 
 impl WlxCapture for XshmCapture {
-    fn init(&mut self, _: &[DrmFormat]) -> std::sync::mpsc::Receiver<WlxFrame> {
+    fn init(&mut self, _: &[DrmFormat]) {
         let (tx_frame, rx_frame) = std::sync::mpsc::sync_channel(4);
         let (tx_cmd, rx_cmd) = std::sync::mpsc::sync_channel(2);
         self.sender = Some(tx_cmd);
+        self.receiver = Some(rx_frame);
 
         std::thread::spawn({
             let monitor = self.screen.monitor.clone();
@@ -85,7 +88,7 @@ impl WlxCapture for XshmCapture {
                             };
                             if let Ok(image) = shm.capture() {
                                 let size = unsafe { image.as_bytes().len() };
-                                let memptr_frame = MemPtrFrame {
+                                let mut memptr_frame = MemPtrFrame {
                                     format: FrameFormat {
                                         width: image.width() as _,
                                         height: image.height() as _,
@@ -94,6 +97,7 @@ impl WlxCapture for XshmCapture {
                                     },
                                     ptr: unsafe { image.as_ptr() as _ },
                                     size,
+                                    mouse: None,
                                 };
 
                                 let Some(root_pos) = d.root_mouse_position() else {
@@ -103,23 +107,10 @@ impl WlxCapture for XshmCapture {
                                     continue;
                                 };
 
-                                let mouse = MouseMeta {
+                                memptr_frame.mouse = Some(MouseMeta {
                                     x: (x as f32) / (image.width() as f32),
                                     y: (y as f32) / (image.height() as f32),
-                                };
-                                let frame = WlxFrame::Mouse(mouse);
-
-                                match tx_frame.try_send(frame) {
-                                    Ok(_) => (),
-                                    Err(mpsc::TrySendError::Full(_)) => (),
-                                    Err(mpsc::TrySendError::Disconnected(_)) => {
-                                        log::warn!(
-                                            "{}: disconnected, stopping capture thread",
-                                            &monitor.name(),
-                                        );
-                                        break;
-                                    }
-                                }
+                                });
 
                                 let frame = WlxFrame::MemPtr(memptr_frame);
                                 match tx_frame.try_send(frame) {
@@ -143,10 +134,17 @@ impl WlxCapture for XshmCapture {
                 warn!("Scr {}: Capture thread stopped", monitor.name());
             }
         });
-        rx_frame
+    }
+    fn receive(&mut self) -> Option<WlxFrame> {
+        if let Some(rx) = self.receiver.as_ref() {
+            return rx.try_iter().last();
+        }
+        None
     }
     fn pause(&mut self) {}
-    fn resume(&mut self) {}
+    fn resume(&mut self) {
+        self.receive(); // clear old frames
+    }
     fn request_new_frame(&mut self) {
         if let Some(sender) = &self.sender {
             let _ = sender.send(());

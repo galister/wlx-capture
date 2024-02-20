@@ -55,7 +55,6 @@ pub enum WlxFrame {
     Dmabuf(DmabufFrame),
     MemFd(MemFdFrame),
     MemPtr(MemPtrFrame),
-    Mouse(MouseMeta),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -156,6 +155,7 @@ pub struct MemPtrFrame {
     pub format: FrameFormat,
     pub ptr: usize,
     pub size: usize,
+    pub mouse: Option<MouseMeta>,
 }
 
 #[derive(Default)]

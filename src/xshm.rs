@@ -1,4 +1,4 @@
-use log::{error, warn};
+use log::{error, trace, warn};
 use std::{
     env,
     error::Error,
@@ -46,7 +46,7 @@ impl XshmCapture {
             .enumerate()
             .map(|x| {
                 Arc::new(XshmScreen {
-                    name: format!("Scr {}", x.1.name()).into(),
+                    name: x.1.name().replace("DisplayPort", "DP").into(),
                     monitor: x.1,
                 })
             })
@@ -65,16 +65,16 @@ impl WlxCapture for XshmCapture {
             let monitor = self.screen.monitor.clone();
             move || {
                 let Ok(lock) = MUTEX.lock() else {
-                    error!("Scr {}: Failed to lock mutex", monitor.name());
+                    error!("{}: Failed to lock mutex", monitor.name());
                     return;
                 };
                 let display = env::var("DISPLAY").expect("DISPLAY not set");
                 let Ok(d) = rxscreen::Display::new(display) else {
-                    error!("Scr {}: Failed to open display", monitor.name());
+                    error!("{}: Failed to open display", monitor.name());
                     return;
                 };
                 let Ok(shm) = d.shm().monitor(&monitor).build() else {
-                    error!("Scr {}: Failed to create shm", monitor.name());
+                    error!("{}: Failed to create shm", monitor.name());
                     return;
                 };
                 drop(lock);
@@ -99,6 +99,7 @@ impl WlxCapture for XshmCapture {
                                     size,
                                     mouse: None,
                                 };
+                                log::trace!("{}: captured frame", &monitor.name());
 
                                 let Some(root_pos) = d.root_mouse_position() else {
                                     continue;
@@ -115,15 +116,19 @@ impl WlxCapture for XshmCapture {
                                 let frame = WlxFrame::MemPtr(memptr_frame);
                                 match tx_frame.try_send(frame) {
                                     Ok(_) => (),
-                                    Err(mpsc::TrySendError::Full(_)) => (),
+                                    Err(mpsc::TrySendError::Full(_)) => {
+                                        trace!("{}: channel full", &monitor.name());
+                                    }
                                     Err(mpsc::TrySendError::Disconnected(_)) => {
                                         log::warn!(
-                                            "{}: disconnected, stopping capture thread",
+                                            "{}: receiver disconnected, stopping capture thread",
                                             &monitor.name(),
                                         );
                                         break;
                                     }
                                 }
+                            } else {
+                                log::debug!("{}: XShmGetImage failed", &monitor.name());
                             }
                         }
                         None => {
@@ -131,7 +136,7 @@ impl WlxCapture for XshmCapture {
                         }
                     }
                 }
-                warn!("Scr {}: Capture thread stopped", monitor.name());
+                warn!("{}: Capture thread stopped", monitor.name());
             }
         });
     }

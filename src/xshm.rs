@@ -83,7 +83,7 @@ impl WlxCapture for XshmCapture {
                 loop {
                     match rx_cmd.try_iter().last() {
                         Some(_) => {
-                            let Ok(_lock) = MUTEX.lock() else {
+                            let Ok(lock) = MUTEX.lock() else {
                                 continue;
                             };
                             if let Ok(image) = shm.capture() {
@@ -130,6 +130,7 @@ impl WlxCapture for XshmCapture {
                             } else {
                                 log::debug!("{}: XShmGetImage failed", &monitor.name());
                             }
+                            drop(lock);
                         }
                         None => {
                             std::thread::sleep(sleep_duration);

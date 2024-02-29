@@ -156,8 +156,11 @@ impl WlxCapture for PipewireCapture {
             move || main_loop(name, node_id, fps, formats, tx_frame, rx_ctrl)
         }));
     }
-    fn ready(&self) -> bool {
+    fn is_ready(&self) -> bool {
         self.rx_frame.is_some()
+    }
+    fn supports_dmbuf(&self) -> bool {
+        true
     }
     fn receive(&mut self) -> Option<WlxFrame> {
         if let Some(rx) = self.rx_frame.as_ref() {

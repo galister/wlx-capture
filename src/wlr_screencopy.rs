@@ -67,8 +67,11 @@ impl WlxCapture for WlrScreencopyCapture {
         self.sender = Some(tx);
         self.receiver = Some(rx);
     }
-    fn ready(&self) -> bool {
+    fn is_ready(&self) -> bool {
         self.receiver.is_some()
+    }
+    fn supports_dmbuf(&self) -> bool {
+        false // screencopy v1
     }
     fn receive(&mut self) -> Option<WlxFrame> {
         if let Some(rx) = self.receiver.as_ref() {

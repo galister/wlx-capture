@@ -10,8 +10,8 @@ use ashpd::{
 use log::debug;
 use log::{error, info, warn};
 use pipewire as pw;
-use pw::properties;
-use pw::spa::data::DataType;
+use pw::properties::properties;
+use pw::spa::buffer::DataType;
 use pw::spa::param::video::VideoFormat;
 use pw::spa::param::video::VideoInfoRaw;
 use pw::spa::param::ParamType;
@@ -23,7 +23,7 @@ use pw::spa::utils::Choice;
 use pw::spa::utils::ChoiceEnum;
 use pw::spa::utils::ChoiceFlags;
 use pw::stream::{Stream, StreamFlags};
-use pw::{Context, Error, MainLoop};
+use pw::{context::Context, main_loop::MainLoop, Error};
 
 use crate::frame::DrmFormat;
 use crate::frame::FourCC;
@@ -108,7 +108,7 @@ pub enum PwChangeRequest {
 
 pub struct PipewireCapture {
     name: Arc<str>,
-    tx_ctrl: Option<mpsc::SyncSender<PwChangeRequest>>,
+    tx_ctrl: Option<pw::channel::Sender<PwChangeRequest>>,
     rx_frame: Option<mpsc::Receiver<WlxFrame>>,
     node_id: u32,
     fps: u32,
@@ -142,7 +142,7 @@ impl Drop for PipewireCapture {
 impl WlxCapture for PipewireCapture {
     fn init(&mut self, dmabuf_formats: &[DrmFormat]) {
         let (tx_frame, rx_frame) = mpsc::sync_channel(2);
-        let (tx_ctrl, rx_ctrl) = mpsc::sync_channel(16);
+        let (tx_ctrl, rx_ctrl) = pw::channel::channel();
 
         self.tx_ctrl = Some(tx_ctrl);
         self.rx_frame = Some(rx_frame);
@@ -170,12 +170,9 @@ impl WlxCapture for PipewireCapture {
     }
     fn pause(&mut self) {
         if let Some(tx_ctrl) = &self.tx_ctrl {
-            match tx_ctrl.try_send(PwChangeRequest::Pause) {
+            match tx_ctrl.send(PwChangeRequest::Pause) {
                 Ok(_) => (),
-                Err(mpsc::TrySendError::Full(_)) => {
-                    warn!("{}: control channel full, cannot pause", &self.name);
-                }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(_) => {
                     warn!("{}: disconnected, stopping stream", &self.name);
                 }
             }
@@ -183,12 +180,9 @@ impl WlxCapture for PipewireCapture {
     }
     fn resume(&mut self) {
         if let Some(tx_ctrl) = &self.tx_ctrl {
-            match tx_ctrl.try_send(PwChangeRequest::Resume) {
+            match tx_ctrl.send(PwChangeRequest::Resume) {
                 Ok(_) => (),
-                Err(mpsc::TrySendError::Full(_)) => {
-                    error!("{}: control channel full, cannot resume", &self.name);
-                }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err(_) => {
                     warn!("{}: disconnected, stopping stream", &self.name);
                 }
             }
@@ -204,9 +198,9 @@ fn main_loop(
     fps: u32,
     dmabuf_formats: Vec<DrmFormat>,
     sender: mpsc::SyncSender<WlxFrame>,
-    receiver: mpsc::Receiver<PwChangeRequest>,
+    receiver: pw::channel::Receiver<PwChangeRequest>,
 ) -> Result<(), Error> {
-    let main_loop = MainLoop::new()?;
+    let main_loop = MainLoop::new(None)?;
     let context = Context::new(&main_loop)?;
     let core = context.connect(None)?;
 
@@ -224,13 +218,13 @@ fn main_loop(
         .add_local_listener_with_user_data(FrameFormat::default())
         .state_changed({
             let name = name.clone();
-            move |old, new| {
+            move |_, _, old, new| {
                 info!("{}: stream state changed: {:?} -> {:?}", &name, old, new);
             }
         })
         .param_changed({
             let name = name.clone();
-            move |stream, id, format, param| {
+            move |stream, format, id, param| {
                 let Some(param) = param else {
                     return;
                 };
@@ -257,10 +251,16 @@ fn main_loop(
                 info!("  format: {} ({:?})", info.format().as_raw(), info.format());
                 info!("  size: {}x{}", info.size().width, info.size().height);
                 info!("  modifier: {}", info.modifier());
-                if let Ok(params) = obj_to_bytes(get_buffer_params()) {
-                    if let Err(e) = stream.update_params(&mut [params.as_ptr() as _]) {
-                        error!("{}: failed to update params: {}", &name, e);
-                    }
+                let Ok(params_bytes) = obj_to_bytes(get_buffer_params()) else {
+                    log::warn!("{}: failed to serialize buffer params", &name);
+                    return;
+                };
+                let Some(params_pod) = Pod::from_bytes(&params_bytes) else {
+                    log::warn!("{}: failed to deserialize buffer params", &name);
+                    return;
+                };
+                if let Err(e) = stream.update_params(&mut [&params_pod]) {
+                    error!("{}: failed to update params: {}", &name, e);
                 }
             }
         })
@@ -367,33 +367,28 @@ fn main_loop(
         .collect();
 
     stream.connect(
-        pw::spa::Direction::Input,
+        pw::spa::utils::Direction::Input,
         Some(node_id),
         StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
         params.as_mut_slice(),
     )?;
 
-    let trigger = main_loop.add_timer({
+    let _receiver = receiver.attach(main_loop.loop_(), {
         let name = name.clone();
         let main_loop = main_loop.clone();
-        move |_| {
-            receiver.try_iter().for_each(|req| match req {
-                PwChangeRequest::Pause => {
-                    let _ = stream.set_active(false);
-                }
-                PwChangeRequest::Resume => {
-                    let _ = stream.set_active(true);
-                }
-                PwChangeRequest::Stop => {
-                    main_loop.quit();
-                    info!("{}: stopping pipewire loop", &name);
-                }
-            })
+        move |req| match req {
+            PwChangeRequest::Pause => {
+                let _ = stream.set_active(false);
+            }
+            PwChangeRequest::Resume => {
+                let _ = stream.set_active(true);
+            }
+            PwChangeRequest::Stop => {
+                main_loop.quit();
+                info!("{}: stopping pipewire loop", &name);
+            }
         }
     });
-
-    let interval = std::time::Duration::from_millis(250);
-    trigger.update_timer(Some(interval), Some(interval));
 
     main_loop.run();
     info!("{}: pipewire loop exited", &name);
@@ -410,13 +405,12 @@ fn obj_to_bytes(obj: pw::spa::pod::Object) -> Result<Vec<u8>, GenError> {
 }
 
 fn get_buffer_params() -> Object {
-    let data_types = (1 << pw::spa::data::DataType::MemFd.as_raw())
-        | (1 << pw::spa::data::DataType::MemPtr.as_raw())
-        | (1 << pw::spa::data::DataType::DmaBuf.as_raw());
+    let data_types = (1 << DataType::MemFd.as_raw())
+        | (1 << DataType::MemPtr.as_raw())
+        | (1 << DataType::DmaBuf.as_raw());
 
-    // TODO stop using libspa-sys when pipewire lib supports this
     let property = Property {
-        key: libspa_sys::SPA_PARAM_BUFFERS_dataType,
+        key: pw::spa::sys::SPA_PARAM_BUFFERS_dataType,
         flags: PropertyFlags::empty(),
         value: Value::Int(data_types),
     };
@@ -433,17 +427,17 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
         pw::spa::utils::SpaTypes::ObjectParamFormat,
         pw::spa::param::ParamType::EnumFormat,
         pw::spa::pod::property!(
-            pw::spa::format::FormatProperties::MediaType,
+            pw::spa::param::format::FormatProperties::MediaType,
             Id,
-            pw::spa::format::MediaType::Video
+            pw::spa::param::format::MediaType::Video
         ),
         pw::spa::pod::property!(
-            pw::spa::format::FormatProperties::MediaSubtype,
+            pw::spa::param::format::FormatProperties::MediaSubtype,
             Id,
-            pw::spa::format::MediaSubtype::Raw
+            pw::spa::param::format::MediaSubtype::Raw
         ),
         pw::spa::pod::property!(
-            pw::spa::format::FormatProperties::VideoSize,
+            pw::spa::param::format::FormatProperties::VideoSize,
             Choice,
             Range,
             Rectangle,
@@ -461,7 +455,7 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
             }
         ),
         pw::spa::pod::property!(
-            pw::spa::format::FormatProperties::VideoFramerate,
+            pw::spa::param::format::FormatProperties::VideoFramerate,
             Choice,
             Range,
             Fraction,
@@ -478,7 +472,7 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
         let spa_fmt = fourcc_to_spa(fmt.fourcc);
 
         let prop = pw::spa::pod::property!(
-            pw::spa::format::FormatProperties::VideoFormat,
+            pw::spa::param::format::FormatProperties::VideoFormat,
             Choice,
             Enum,
             Id,
@@ -489,7 +483,7 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
 
         // TODO rewrite when property macro supports Long
         let prop = Property {
-            key: pw::spa::format::FormatProperties::VideoModifier.as_raw(),
+            key: pw::spa::param::format::FormatProperties::VideoModifier.as_raw(),
             flags: PropertyFlags::MANDATORY | PropertyFlags::DONT_FIXATE,
             value: Value::Choice(ChoiceValue::Long(Choice(
                 ChoiceFlags::from_bits_truncate(0),
@@ -502,7 +496,7 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
         obj.properties.push(prop);
     } else {
         let prop = pw::spa::pod::property!(
-            pw::spa::format::FormatProperties::VideoFormat,
+            pw::spa::param::format::FormatProperties::VideoFormat,
             Choice,
             Enum,
             Id,

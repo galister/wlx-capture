@@ -1,7 +1,7 @@
 use libc::{O_CREAT, O_RDWR, S_IRUSR, S_IWUSR};
 use std::{
     ffi::CString,
-    os::fd::RawFd,
+    os::fd::{BorrowedFd, RawFd},
     sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc::{self, Sender, SyncSender},
@@ -226,7 +226,11 @@ impl Dispatch<ZwlrScreencopyFrameV1, SyncSender<ScreenCopyEvent>> for WlxClient 
                     fd
                 };
 
-                let pool = state.wl_shm.create_pool(fd, size as _, qhandle, ());
+                let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
+
+                let pool = state
+                    .wl_shm
+                    .create_pool(borrowed_fd, size as _, qhandle, ());
 
                 let buffer = pool.create_buffer(
                     0,

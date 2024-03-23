@@ -7,6 +7,8 @@ use ashpd::{
     WindowIdentifier,
 };
 
+pub use ashpd::Error as AshpdError;
+
 use log::debug;
 use log::{error, info, warn};
 use pipewire as pw;
@@ -46,7 +48,7 @@ pub async fn pipewire_select_screen(
     embed_mouse: bool,
     screens_only: bool,
     persist: bool,
-) -> Result<PipewireSelectScreenResult, ashpd::Error> {
+) -> Result<PipewireSelectScreenResult, AshpdError> {
     let proxy = Screencast::new().await?;
     let session = proxy.create_session().await?;
 

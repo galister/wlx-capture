@@ -38,6 +38,7 @@ pub struct WlxOutput {
     pub logical_pos: (i32, i32),
     pub logical_size: (i32, i32),
     pub transform: Transform,
+    pub dirty: bool,
     done: bool,
     updated: Instant,
 }
@@ -89,8 +90,9 @@ impl WlxClient {
 
     pub fn refresh_if_dirty(&mut self) -> bool {
         if self.dirty {
+            let changed = self.refresh_outputs();
             self.dirty = false;
-            self.refresh_outputs()
+            changed
         } else {
             false
         }
@@ -122,6 +124,7 @@ impl WlxClient {
                         logical_size: (0, 0),
                         transform: Transform::Normal,
                         done: false,
+                        dirty: false,
                         updated: now,
                     };
 
@@ -176,6 +179,7 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
                 output.logical_pos.1 += output.logical_size.1;
                 output.logical_size.1 *= -1;
             }
+            output.dirty = false;
             output.done = true;
             debug!(
                 "Discovered WlOutput {}; Size: {:?}; Logical Size: {:?}; Pos: {:?}",
@@ -199,6 +203,7 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
                             x,
                             y
                         );
+                        output.dirty = true;
                         state.dirty = true;
                         return;
                     }
@@ -218,6 +223,7 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
                             output.logical_size,
                             (width, height),
                         );
+                        output.dirty = true;
                         state.dirty = true;
                         return;
                     }
@@ -252,6 +258,7 @@ impl Dispatch<WlOutput, u32> for WlxClient {
                             output.size,
                             (width, height)
                         );
+                        output.dirty = true;
                         state.dirty = true;
                         return;
                     }
@@ -270,6 +277,7 @@ impl Dispatch<WlOutput, u32> for WlxClient {
                             output.transform,
                             transform
                         );
+                        output.dirty = true;
                         state.dirty = true;
                         return;
                     }
@@ -301,9 +309,10 @@ impl Dispatch<WlRegistry, ()> for WlxClient {
                 }
             }
             wl_registry::Event::GlobalRemove { name } => {
-                if state.outputs.contains_key(name) {
+                if let Some(output) = state.outputs.get_mut(name) {
                     log::info!("WlOutput {} removed", name);
                     state.dirty = true;
+                    output.dirty = true;
                 }
             }
             _ => {}

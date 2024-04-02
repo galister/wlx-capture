@@ -22,7 +22,7 @@ use wayland_client::{
     globals::{registry_queue_init, GlobalList, GlobalListContents},
     protocol::{
         wl_output::{self, Transform, WlOutput},
-        wl_registry::WlRegistry,
+        wl_registry::{self, WlRegistry},
         wl_seat::WlSeat,
         wl_shm::WlShm,
     },
@@ -53,6 +53,7 @@ pub struct WlxClient {
     pub queue: Arc<Mutex<EventQueue<Self>>>,
     pub globals: GlobalList,
     pub queue_handle: QueueHandle<Self>,
+    pub dirty: bool,
     default_output_name: Arc<str>,
 }
 
@@ -78,11 +79,21 @@ impl WlxClient {
             globals,
             queue_handle: qh,
             default_output_name: "Unknown".into(),
+            dirty: false,
         };
 
         state.refresh_outputs();
 
         Some(state)
+    }
+
+    pub fn refresh_if_dirty(&mut self) -> bool {
+        if self.dirty {
+            self.dirty = false;
+            self.refresh_outputs()
+        } else {
+            false
+        }
     }
 
     pub fn refresh_outputs(&mut self) -> bool {
@@ -156,6 +167,21 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+        fn finalize_output(output: &mut WlxOutput) {
+            if output.logical_size.0 < 0 {
+                output.logical_pos.0 += output.logical_size.0;
+                output.logical_size.0 *= -1;
+            }
+            if output.logical_size.1 < 0 {
+                output.logical_pos.1 += output.logical_size.1;
+                output.logical_size.1 *= -1;
+            }
+            output.done = true;
+            debug!(
+                "Discovered WlOutput {}; Size: {:?}; Logical Size: {:?}; Pos: {:?}",
+                output.name, output.size, output.logical_size, output.logical_pos
+            );
+        }
         match event {
             zxdg_output_v1::Event::Name { name } => {
                 if let Some(output) = state.outputs.get_mut(*data) {
@@ -164,29 +190,42 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
             }
             zxdg_output_v1::Event::LogicalPosition { x, y } => {
                 if let Some(output) = state.outputs.get_mut(*data) {
+                    if output.done {
+                        log::info!(
+                            "{}: Logical pos changed {}x{} -> {}x{}",
+                            output.name,
+                            output.logical_pos.0,
+                            output.logical_pos.1,
+                            x,
+                            y
+                        );
+                        state.dirty = true;
+                        return;
+                    }
+
                     output.logical_pos = (x, y);
+                    if output.logical_size != (0, 0) {
+                        finalize_output(output);
+                    }
                 }
             }
             zxdg_output_v1::Event::LogicalSize { width, height } => {
                 if let Some(output) = state.outputs.get_mut(*data) {
+                    if output.done {
+                        log::info!(
+                            "{}: Logical size changed {:?} -> {:?}",
+                            output.name,
+                            output.logical_size,
+                            (width, height),
+                        );
+                        state.dirty = true;
+                        return;
+                    }
+
                     output.logical_size = (width, height);
-                }
-            }
-            zxdg_output_v1::Event::Done => {
-                if let Some(output) = state.outputs.get_mut(*data) {
-                    if output.logical_size.0 < 0 {
-                        output.logical_pos.0 += output.logical_size.0;
-                        output.logical_size.0 *= -1;
+                    if output.logical_pos != (0, 0) {
+                        finalize_output(output);
                     }
-                    if output.logical_size.1 < 0 {
-                        output.logical_pos.1 += output.logical_size.1;
-                        output.logical_size.1 *= -1;
-                    }
-                    output.done = true;
-                    debug!(
-                        "Discovered WlOutput {}; Size: {:?}; Logical Size: {:?}; Pos: {:?}",
-                        output.name, output.size, output.logical_size, output.logical_pos
-                    );
                 }
             }
             _ => {}
@@ -206,6 +245,16 @@ impl Dispatch<WlOutput, u32> for WlxClient {
         match event {
             wl_output::Event::Mode { width, height, .. } => {
                 if let Some(output) = state.outputs.get_mut(*data) {
+                    if output.done && output.size != (width, height) {
+                        log::info!(
+                            "{}: Resolution changed {:?} -> {:?}",
+                            output.name,
+                            output.size,
+                            (width, height)
+                        );
+                        state.dirty = true;
+                        return;
+                    }
                     output.size = (width, height);
                 }
             }
@@ -213,8 +262,48 @@ impl Dispatch<WlOutput, u32> for WlxClient {
                 model, transform, ..
             } => {
                 if let Some(output) = state.outputs.get_mut(*data) {
+                    let transform = transform.into_result().unwrap_or(Transform::Normal);
+                    if output.done && output.transform != transform {
+                        log::info!(
+                            "{}: Transform changed {:?} -> {:?}",
+                            output.name,
+                            output.transform,
+                            transform
+                        );
+                        state.dirty = true;
+                        return;
+                    }
                     output.model = model.into();
-                    output.transform = transform.into_result().unwrap_or(Transform::Normal);
+                    output.transform = transform;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlRegistry, ()> for WlxClient {
+    fn event(
+        state: &mut Self,
+        _proxy: &WlRegistry,
+        event: <WlRegistry as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_registry::Event::Global {
+                name, interface, ..
+            } => {
+                if interface == WlOutput::interface().name {
+                    log::info!("WlOutput {} added", name);
+                    state.dirty = true;
+                }
+            }
+            wl_registry::Event::GlobalRemove { name } => {
+                if state.outputs.contains_key(name) {
+                    log::info!("WlOutput {} removed", name);
+                    state.dirty = true;
                 }
             }
             _ => {}
@@ -223,18 +312,6 @@ impl Dispatch<WlOutput, u32> for WlxClient {
 }
 
 // Plumbing below
-
-impl Dispatch<WlRegistry, ()> for WlxClient {
-    fn event(
-        _state: &mut Self,
-        _proxy: &WlRegistry,
-        _event: <WlRegistry as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
-    ) {
-    }
-}
 
 impl Dispatch<ZxdgOutputManagerV1, ()> for WlxClient {
     fn event(

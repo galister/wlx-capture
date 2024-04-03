@@ -154,6 +154,13 @@ impl WlxClient {
             let _ = queue_mut.blocking_dispatch(self);
         }
     }
+
+    /// Dispatch pending events without blocking.
+    pub fn dispatch_pending(&mut self) {
+        if let Ok(mut queue_mut) = self.queue.clone().lock() {
+            let _ = queue_mut.dispatch_pending(self);
+        }
+    }
 }
 
 impl Dispatch<ZxdgOutputV1, u32> for WlxClient {

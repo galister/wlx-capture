@@ -158,6 +158,9 @@ impl WlxClient {
     /// Dispatch pending events without blocking.
     pub fn dispatch_pending(&mut self) {
         if let Ok(mut queue_mut) = self.queue.clone().lock() {
+            if let Some(reader) = queue_mut.prepare_read() {
+                let _ = reader.read();
+            }
             let _ = queue_mut.dispatch_pending(self);
         }
     }

@@ -125,6 +125,15 @@ impl WlxClient {
         self.outputs.insert(name, output);
     }
 
+    pub fn get_desktop_origin(&self) -> (i32, i32) {
+        let mut origin = (i32::MAX, i32::MAX);
+        for output in self.outputs.values() {
+            origin.0 = origin.0.min(output.logical_pos.0);
+            origin.1 = origin.1.min(output.logical_pos.1);
+        }
+        origin
+    }
+
     /// Get the logical width and height of the desktop.
     pub fn get_desktop_extent(&self) -> (i32, i32) {
         let mut extent = (0, 0);

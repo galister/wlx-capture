@@ -19,6 +19,7 @@ use smithay_client_toolkit::reexports::{
 
 pub use wayland_client;
 use wayland_client::{
+    backend::WaylandError,
     globals::{registry_queue_init, GlobalList, GlobalListContents},
     protocol::{
         wl_output::{self, Transform, WlOutput},
@@ -159,9 +160,27 @@ impl WlxClient {
     pub fn dispatch_pending(&mut self) {
         if let Ok(mut queue_mut) = self.queue.clone().lock() {
             if let Some(reader) = queue_mut.prepare_read() {
-                let _ = reader.read();
+                match reader.read() {
+                    Ok(n) => match queue_mut.dispatch_pending(self) {
+                        Ok(n2) => {
+                            log::debug!("Read {}, dispatched {} pending events", n, n2);
+                        }
+                        Err(err) => {
+                            log::warn!("Error while dispatching {} pending events: {:?}", n, err);
+                        }
+                    },
+                    Err(err) => {
+                        if let WaylandError::Io(ref e) = err {
+                            if e.kind() == std::io::ErrorKind::WouldBlock {
+                                return;
+                            }
+                        }
+                        log::warn!("Error while reading from event queue: {:?}", err);
+                    }
+                }
+            } else {
+                let _ = queue_mut.dispatch_pending(self);
             }
-            let _ = queue_mut.dispatch_pending(self);
         }
     }
 }
@@ -184,11 +203,13 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
                 output.logical_pos.1 += output.logical_size.1;
                 output.logical_size.1 *= -1;
             }
-            output.done = true;
-            debug!(
-                "Discovered WlOutput {}; Size: {:?}; Logical Size: {:?}; Pos: {:?}",
-                output.name, output.size, output.logical_size, output.logical_pos
-            );
+            if !output.done {
+                output.done = true;
+                debug!(
+                    "Discovered WlOutput {}; Size: {:?}; Logical Size: {:?}; Pos: {:?}",
+                    output.name, output.size, output.logical_size, output.logical_pos
+                );
+            }
         }
         match event {
             zxdg_output_v1::Event::Name { name } => {
@@ -210,6 +231,8 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
                             output.logical_pos,
                         );
                         state.events.push_back(OutputChangeEvent::Logical(*data));
+                    } else {
+                        state.events.push_back(OutputChangeEvent::Create(*data));
                     }
                 }
             }
@@ -227,6 +250,8 @@ impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
                             output.logical_size,
                         );
                         state.events.push_back(OutputChangeEvent::Logical(*data));
+                    } else {
+                        state.events.push_back(OutputChangeEvent::Create(*data));
                     }
                 }
             }
@@ -274,6 +299,7 @@ impl Dispatch<WlOutput, u32> for WlxClient {
                             transform
                         );
                         state.events.push_back(OutputChangeEvent::Physical(*data));
+                        state.events.push_back(OutputChangeEvent::Logical(*data));
                     }
                     output.model = model.into();
                 }
@@ -283,13 +309,13 @@ impl Dispatch<WlOutput, u32> for WlxClient {
     }
 }
 
-impl Dispatch<WlRegistry, ()> for WlxClient {
+impl Dispatch<WlRegistry, GlobalListContents> for WlxClient {
     fn event(
         state: &mut Self,
         _proxy: &WlRegistry,
         event: <WlRegistry as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
+        _data: &GlobalListContents,
+        conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
         match event {
@@ -300,8 +326,7 @@ impl Dispatch<WlRegistry, ()> for WlxClient {
             } => {
                 if interface == WlOutput::interface().name {
                     state.add_output(name, version);
-                    state.dispatch();
-                    state.events.push_back(OutputChangeEvent::Create(name));
+                    let _ = conn.roundtrip();
                 }
             }
             wl_registry::Event::GlobalRemove { name } => {
@@ -371,18 +396,6 @@ impl Dispatch<WlShm, ()> for WlxClient {
         _proxy: &WlShm,
         _event: <WlShm as Proxy>::Event,
         _data: &(),
-        _conn: &Connection,
-        _qhandle: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<WlRegistry, GlobalListContents> for WlxClient {
-    fn event(
-        _state: &mut Self,
-        _proxy: &WlRegistry,
-        _event: <WlRegistry as Proxy>::Event,
-        _data: &GlobalListContents,
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {

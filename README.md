@@ -5,9 +5,9 @@ This aims to be an all-in-one Linux desktop capture solution.
 I'm primarily using this for various XR projects.
 
 Supported capture methods:
-- Pipewire (MemFd/MemPtr as for now)
-- Wlr-Dmabuf (Sway, Hyprland, etc)
-- XSHM (not tested)
+- Pipewire (MemFd+MemPtr+DmaBuf)
+- Wlr-Dmabuf (Sway, Hyprland, River etc)
+- XSHM
 
 # Early Development
 
@@ -20,13 +20,13 @@ This project is in a highly experimental state. If you want to talk about this p
 
 ### Pipewire Setup
 ```rust
-let Ok(node_id) = pipewire_select_screen(None).await else {
+let Ok(node_id) = pipewire_select_screen(None, true, true, true).await else {
     return;
 };
 let capture = PipewireCapture::new(
     "wlx-capture", // name of stream
     node_id,
-    60, // fps
+    60, // fps to give to pipewire, no effect as of writing
 );
 ```
 
@@ -56,20 +56,15 @@ loop {
     if let Ok(frame) = frame_rx.try_recv() {
         match frame {
             WlxFrame::DmaBuf(dmabuf_frame) => {
-                // vulkano: load using StorageImage::new_from_dma_buf_fd
+                // vulkano: https://github.com/galister/wlx-overlay-s/blob/6ee0cb4fd1bd099a0f22171656f87f85e3f86abd/src/graphics.rs#L740
                 // egl: https://github.com/galister/wlx-overlay-x/blob/04f5e90cf8248705010beaf35aed3cf22f0e62c1/src/desktop/frame.rs#L255
-            },
+            }
             WlxFrame::MemFd(memfd_frame) => {
                 // egl: https://github.com/galister/wlx-overlay-x/blob/04f5e90cf8248705010beaf35aed3cf22f0e62c1/src/desktop/frame.rs#L207
             }
             WlxFrame::MemPtr(memptr_frame) => {
                 // egl: https://github.com/galister/wlx-overlay-x/blob/04f5e90cf8248705010beaf35aed3cf22f0e62c1/src/desktop/frame.rs#L185
-            },
-            WlxFrame::MouseMeta(mouse) => {
-                // render cursor (XSHM only)
-                continue; // don't request new frame
-            },
-            _ => {}
+            }
         }
         capture.request_new_frame();
     }

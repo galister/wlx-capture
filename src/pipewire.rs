@@ -38,8 +38,14 @@ use crate::frame::DRM_FORMAT_XRGB8888;
 use crate::frame::{DmabufFrame, FramePlane, MemFdFrame, MemPtrFrame};
 use crate::WlxCapture;
 
-pub struct PipewireSelectScreenResult {
+pub struct PipewireStream {
     pub node_id: u32,
+    pub position: Option<(i32, i32)>,
+    pub size: Option<(i32, i32)>,
+}
+
+pub struct PipewireSelectScreenResult {
+    pub streams: Vec<PipewireStream>,
     pub restore_token: Option<String>,
 }
 
@@ -48,6 +54,7 @@ pub async fn pipewire_select_screen(
     embed_mouse: bool,
     screens_only: bool,
     persist: bool,
+    multiple: bool,
 ) -> Result<PipewireSelectScreenResult, AshpdError> {
     let proxy = Screencast::new().await?;
     let session = proxy.create_session().await?;
@@ -75,7 +82,7 @@ pub async fn pipewire_select_screen(
             &session,
             cursor_mode,
             source_type,
-            false,
+            multiple,
             token,
             persist_mode,
         )
@@ -86,9 +93,18 @@ pub async fn pipewire_select_screen(
         .await?
         .response()?;
 
-    if let Some(stream) = response.streams().first() {
-        return Ok(PipewireSelectScreenResult {
+    let streams: Vec<_> = response
+        .streams()
+        .iter()
+        .map(|stream| PipewireStream {
             node_id: stream.pipe_wire_node_id(),
+            position: stream.position(),
+            size: stream.size(),
+        })
+        .collect();
+    if !streams.is_empty() {
+        return Ok(PipewireSelectScreenResult {
+            streams,
             restore_token: response.restore_token().map(String::from),
         });
     }

@@ -1,5 +1,6 @@
 use libc::{O_CREAT, O_RDWR, S_IRUSR, S_IWUSR};
 use std::{
+    collections::VecDeque,
     ffi::CString,
     os::fd::{BorrowedFd, RawFd},
     sync::{
@@ -24,10 +25,25 @@ use crate::{
     WlxCapture,
 };
 
+struct BufData {
+    wl_buffer: WlBuffer,
+    wl_pool: WlShmPool,
+    fd: RawFd,
+}
+
+impl Drop for BufData {
+    fn drop(&mut self) {
+        self.wl_buffer.destroy();
+        self.wl_pool.destroy();
+        unsafe {
+            libc::close(self.fd);
+        }
+    }
+}
+
 enum ScreenCopyEvent {
     Buffer {
-        wl_buffer: WlBuffer,
-        fd: RawFd,
+        data: BufData,
         fourcc: FourCC,
         width: u32,
         height: u32,
@@ -41,9 +57,9 @@ pub struct WlrScreencopyCapture {
     output_id: u32,
     wl: Option<Box<WlxClient>>,
     handle: Option<JoinHandle<Box<WlxClient>>>,
-    sender: Option<mpsc::Sender<(WlxFrame, WlBuffer)>>,
-    receiver: Option<mpsc::Receiver<(WlxFrame, WlBuffer)>>,
-    last_buffer: Option<WlBuffer>,
+    sender: Option<mpsc::Sender<(WlxFrame, BufData)>>,
+    receiver: Option<mpsc::Receiver<(WlxFrame, BufData)>>,
+    buffers: VecDeque<BufData>,
 }
 
 impl WlrScreencopyCapture {
@@ -54,7 +70,7 @@ impl WlrScreencopyCapture {
             handle: None,
             sender: None,
             receiver: None,
-            last_buffer: None,
+            buffers: VecDeque::with_capacity(2),
         }
     }
 }
@@ -75,18 +91,24 @@ impl WlxCapture for WlrScreencopyCapture {
     }
     fn receive(&mut self) -> Option<WlxFrame> {
         if let Some(rx) = self.receiver.as_ref() {
-            if let Some((frame, buffer)) = rx.try_iter().last() {
-                self.last_buffer = Some(buffer);
+            if let Some((frame, data)) = rx.try_iter().last() {
+                if self.buffers.len() > 1 {
+                    self.buffers.pop_front();
+                }
+                self.buffers.push_back(data);
                 return Some(frame);
             }
         }
         None
     }
-    fn pause(&mut self) {
-        self.last_buffer.take();
-    }
+    fn pause(&mut self) {}
     fn resume(&mut self) {
+        if self.sender.is_none() {
+            return;
+        }
         self.receive(); // clear old frames
+        self.buffers.clear();
+        self.request_new_frame();
     }
     fn request_new_frame(&mut self) {
         if let Some(handle) = self.handle.take() {
@@ -117,7 +139,7 @@ impl WlxCapture for WlrScreencopyCapture {
 fn request_screencopy_frame(
     client: Box<WlxClient>,
     output_id: u32,
-    sender: Sender<(WlxFrame, WlBuffer)>,
+    sender: Sender<(WlxFrame, BufData)>,
 ) -> Box<WlxClient> {
     let Some(screencopy_manager) = client.maybe_wlr_screencopy_mgr.as_ref() else {
         return client;
@@ -132,6 +154,8 @@ fn request_screencopy_frame(
     let _ =
         screencopy_manager.capture_output(1, &output.wl_output, &client.queue_handle, tx.clone());
 
+    let name = output.name.clone();
+
     let mut client = client;
     client.dispatch();
 
@@ -141,8 +165,7 @@ fn request_screencopy_frame(
         for event in rx.try_iter() {
             match event {
                 ScreenCopyEvent::Buffer {
-                    wl_buffer,
-                    fd,
+                    data,
                     fourcc,
                     width,
                     height,
@@ -156,21 +179,24 @@ fn request_screencopy_frame(
                             modifier: 0,
                         },
                         plane: FramePlane {
-                            fd: Some(fd),
+                            fd: Some(data.fd),
                             offset: 0,
                             stride: stride as _,
                         },
                     };
-                    let buffer = wl_buffer;
-                    frame_buffer = Some((frame, buffer));
+                    log::trace!("{}: Received screencopy buffer, copying", name.as_ref());
+                    frame_buffer = Some((frame, data));
+                    client.dispatch();
                 }
                 ScreenCopyEvent::Ready => {
-                    if let Some((frame, buffer)) = frame_buffer {
-                        let _ = sender.send((WlxFrame::MemFd(frame), buffer));
+                    if let Some((frame, data)) = frame_buffer {
+                        let _ = sender.send((WlxFrame::MemFd(frame), data));
+                        log::trace!("{}: Frame ready", name.as_ref());
                     }
                     break 'receiver;
                 }
                 ScreenCopyEvent::Failed => {
+                    log::trace!("{}: Frame failed", name.as_ref());
                     break 'receiver;
                 }
             };
@@ -228,11 +254,11 @@ impl Dispatch<ZwlrScreencopyFrameV1, SyncSender<ScreenCopyEvent>> for WlxClient 
 
                 let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
 
-                let pool = state
+                let wl_pool = state
                     .wl_shm
                     .create_pool(borrowed_fd, size as _, qhandle, ());
 
-                let buffer = pool.create_buffer(
+                let wl_buffer = wl_pool.create_buffer(
                     0,
                     width as _,
                     height as _,
@@ -242,10 +268,13 @@ impl Dispatch<ZwlrScreencopyFrameV1, SyncSender<ScreenCopyEvent>> for WlxClient 
                     (),
                 );
 
-                proxy.copy(&buffer);
+                proxy.copy(&wl_buffer);
                 let _ = data.send(ScreenCopyEvent::Buffer {
-                    wl_buffer: buffer,
-                    fd,
+                    data: BufData {
+                        wl_buffer,
+                        wl_pool,
+                        fd,
+                    },
                     fourcc,
                     width,
                     height,

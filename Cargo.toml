@@ -1,6 +1,6 @@
 [package]
 name = "wlx-capture"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 authors = ["galister"]
 description = "Screen capture library for Wayland and X11"
@@ -15,7 +15,11 @@ default = ["wlr", "pipewire", "xshm"]
 egl = []
 wlr = ["wayland"]
 pipewire = ["wayland", "dep:ashpd", "dep:pipewire"]
-wayland = ["dep:smithay-client-toolkit", "dep:wayland-client", "dep:wayland-protocols"]
+wayland = [
+  "dep:smithay-client-toolkit",
+  "dep:wayland-client",
+  "dep:wayland-protocols",
+]
 xshm = ["dep:xcb", "dep:rxscreen"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -28,8 +32,21 @@ libc = "0.2.153"
 log = "0.4.21"
 once_cell = "1.19.0"
 pipewire = { version = "0.8.0", features = ["v0_3_33"], optional = true }
-rxscreen = { version = "0.1.7", features = ["shm", "xrandr", "mouse"], optional = true }
+rxscreen = { version = "0.1.7", features = [
+  "shm",
+  "xrandr",
+  "mouse",
+], optional = true }
 smithay-client-toolkit = { version = "0.18.1", optional = true }
 wayland-client = { version = "0.31.2", optional = true }
-wayland-protocols = { version = "0.31.2", features = ["wayland-client", "client", "staging", "unstable"], optional = true }
-xcb = { version = "1.3.0", features = ["shm", "randr", "xinerama"], optional = true }
+wayland-protocols = { version = "0.31.2", features = [
+  "wayland-client",
+  "client",
+  "staging",
+  "unstable",
+], optional = true }
+xcb = { version = "1.3.0", features = [
+  "shm",
+  "randr",
+  "xinerama",
+], optional = true }

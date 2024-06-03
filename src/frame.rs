@@ -40,6 +40,8 @@ pub const DRM_FORMAT_ARGB8888: u32 = 0x34325241; // AR24
 pub const DRM_FORMAT_ABGR8888: u32 = 0x34324241; // AB24
 pub const DRM_FORMAT_XRGB8888: u32 = 0x34325258; // XR24
 pub const DRM_FORMAT_XBGR8888: u32 = 0x34324258; // XB24
+pub const DRM_FORMAT_ABGR2101010: u32 = 0x30334241; // AB30
+pub const DRM_FORMAT_XBGR2101010: u32 = 0x30334258; // XB30
 
 #[cfg(feature = "egl")]
 #[rustfmt::skip]

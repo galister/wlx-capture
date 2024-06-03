@@ -31,8 +31,10 @@ use crate::frame::DrmFormat;
 use crate::frame::FourCC;
 use crate::frame::FrameFormat;
 use crate::frame::WlxFrame;
+use crate::frame::DRM_FORMAT_ABGR2101010;
 use crate::frame::DRM_FORMAT_ABGR8888;
 use crate::frame::DRM_FORMAT_ARGB8888;
+use crate::frame::DRM_FORMAT_XBGR2101010;
 use crate::frame::DRM_FORMAT_XBGR8888;
 use crate::frame::DRM_FORMAT_XRGB8888;
 use crate::frame::{DmabufFrame, FramePlane, MemFdFrame, MemPtrFrame};
@@ -113,18 +115,16 @@ pub struct PipewireCapture {
     tx_ctrl: Option<pw::channel::Sender<PwChangeRequest>>,
     rx_frame: Option<mpsc::Receiver<WlxFrame>>,
     node_id: u32,
-    fps: u32,
     handle: Option<JoinHandle<Result<(), Error>>>,
 }
 
 impl PipewireCapture {
-    pub fn new(name: Arc<str>, node_id: u32, fps: u32) -> Self {
+    pub fn new(name: Arc<str>, node_id: u32) -> Self {
         PipewireCapture {
             name,
             tx_ctrl: None,
             rx_frame: None,
             node_id,
-            fps,
             handle: None,
         }
     }
@@ -152,10 +152,9 @@ impl WlxCapture for PipewireCapture {
         self.handle = Some(std::thread::spawn({
             let name = self.name.clone();
             let node_id = self.node_id;
-            let fps = self.fps;
             let formats = dmabuf_formats.to_vec();
 
-            move || main_loop(name, node_id, fps, formats, tx_frame, rx_ctrl)
+            move || main_loop(name, node_id, formats, tx_frame, rx_ctrl)
         }));
     }
     fn is_ready(&self) -> bool {
@@ -197,7 +196,6 @@ impl WlxCapture for PipewireCapture {
 fn main_loop(
     name: Arc<str>,
     node_id: u32,
-    fps: u32,
     dmabuf_formats: Vec<DrmFormat>,
     sender: mpsc::SyncSender<WlxFrame>,
     receiver: pw::channel::Receiver<PwChangeRequest>,
@@ -261,7 +259,8 @@ fn main_loop(
                     log::warn!("{}: failed to deserialize buffer params", &name);
                     return;
                 };
-                if let Err(e) = stream.update_params(&mut [&params_pod]) {
+                let mut pods = [params_pod];
+                if let Err(e) = stream.update_params(&mut pods) {
                     error!("{}: failed to update params: {}", &name, e);
                 }
             }
@@ -357,11 +356,11 @@ fn main_loop(
 
     let mut format_params: Vec<Vec<u8>> = dmabuf_formats
         .iter()
-        .filter_map(|f| obj_to_bytes(get_format_params(Some(f), fps)).ok())
+        .filter_map(|f| obj_to_bytes(get_format_params(Some(f))).ok())
         .collect();
 
-    format_params.push(obj_to_bytes(get_format_params(None, fps)).unwrap()); // safe unwrap: known
-                                                                             // good values
+    format_params.push(obj_to_bytes(get_format_params(None)).unwrap()); // safe unwrap: known
+                                                                        // good values
 
     let mut params: Vec<&Pod> = format_params
         .iter()
@@ -424,7 +423,7 @@ fn get_buffer_params() -> Object {
     )
 }
 
-fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
+fn get_format_params(fmt: Option<&DrmFormat>) -> Object {
     let mut obj = pw::spa::pod::object!(
         pw::spa::utils::SpaTypes::ObjectParamFormat,
         pw::spa::param::ParamType::EnumFormat,
@@ -461,7 +460,7 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
             Choice,
             Range,
             Fraction,
-            pw::spa::utils::Fraction { num: fps, denom: 1 },
+            pw::spa::utils::Fraction { num: 0, denom: 1 },
             pw::spa::utils::Fraction { num: 0, denom: 1 },
             pw::spa::utils::Fraction {
                 num: 1000,
@@ -488,7 +487,7 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
             key: pw::spa::param::format::FormatProperties::VideoModifier.as_raw(),
             flags: PropertyFlags::MANDATORY | PropertyFlags::DONT_FIXATE,
             value: Value::Choice(ChoiceValue::Long(Choice(
-                ChoiceFlags::from_bits_truncate(0),
+                ChoiceFlags::empty(),
                 ChoiceEnum::Enum {
                     default: fmt.modifiers[0] as _,
                     alternatives: fmt.modifiers.iter().map(|m| *m as _).collect(),
@@ -507,6 +506,8 @@ fn get_format_params(fmt: Option<&DrmFormat>, fps: u32) -> Object {
             pw::spa::param::video::VideoFormat::BGRA,
             pw::spa::param::video::VideoFormat::RGBx,
             pw::spa::param::video::VideoFormat::BGRx,
+            pw::spa::param::video::VideoFormat::ABGR_210LE,
+            pw::spa::param::video::VideoFormat::xBGR_210LE,
         );
         obj.properties.push(prop);
     }
@@ -520,6 +521,8 @@ fn fourcc_to_spa(fourcc: FourCC) -> VideoFormat {
         DRM_FORMAT_ABGR8888 => VideoFormat::RGBA,
         DRM_FORMAT_XRGB8888 => VideoFormat::BGRx,
         DRM_FORMAT_XBGR8888 => VideoFormat::RGBx,
+        DRM_FORMAT_ABGR2101010 => VideoFormat::ABGR_210LE,
+        DRM_FORMAT_XBGR2101010 => VideoFormat::xBGR_210LE,
         _ => panic!("Unsupported format"),
     }
 }
@@ -531,6 +534,8 @@ fn spa_to_fourcc(spa: VideoFormat) -> FourCC {
         VideoFormat::RGBA => DRM_FORMAT_ABGR8888.into(),
         VideoFormat::BGRx => DRM_FORMAT_XRGB8888.into(),
         VideoFormat::RGBx => DRM_FORMAT_XBGR8888.into(),
+        VideoFormat::ABGR_210LE => DRM_FORMAT_ABGR2101010.into(),
+        VideoFormat::xBGR_210LE => DRM_FORMAT_XBGR2101010.into(),
         _ => panic!("Unsupported format"),
     }
 }

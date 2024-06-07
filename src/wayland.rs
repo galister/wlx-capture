@@ -45,6 +45,7 @@ pub struct WlxOutput {
     pub wl_output: WlOutput,
     pub id: u32,
     pub name: Arc<str>,
+    pub make: Arc<str>,
     pub model: Arc<str>,
     pub size: (i32, i32),
     pub logical_pos: (i32, i32),
@@ -115,6 +116,7 @@ impl WlxClient {
             wl_output,
             id: name,
             name: self.default_output_name.clone(),
+            make: self.default_output_name.clone(),
             model: self.default_output_name.clone(),
             size: (0, 0),
             logical_pos: (0, 0),
@@ -285,7 +287,10 @@ impl Dispatch<WlOutput, u32> for WlxClient {
                 }
             }
             wl_output::Event::Geometry {
-                model, transform, ..
+                make,
+                model,
+                transform,
+                ..
             } => {
                 if let Some(output) = state.outputs.get_mut(*data) {
                     let transform = transform.into_result().unwrap_or(Transform::Normal);
@@ -301,6 +306,7 @@ impl Dispatch<WlOutput, u32> for WlxClient {
                         state.events.push_back(OutputChangeEvent::Physical(*data));
                         state.events.push_back(OutputChangeEvent::Logical(*data));
                     }
+                    output.make = make.into();
                     output.model = model.into();
                 }
             }

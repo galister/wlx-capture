@@ -1,6 +1,6 @@
 [package]
 name = "wlx-capture"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2021"
 authors = ["galister"]
 description = "Screen capture library for Wayland and X11"
@@ -37,9 +37,9 @@ rxscreen = { version = "0.1.7", features = [
   "xrandr",
   "mouse",
 ], optional = true }
-smithay-client-toolkit = { version = "0.18.1", optional = true }
+smithay-client-toolkit = { version = "0.19.1", optional = true }
 wayland-client = { version = "0.31.2", optional = true }
-wayland-protocols = { version = "0.31.2", features = [
+wayland-protocols = { version = "0.32.1", features = [
   "wayland-client",
   "client",
   "staging",

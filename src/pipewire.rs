@@ -9,8 +9,6 @@ use ashpd::{
 
 pub use ashpd::Error as AshpdError;
 
-use log::debug;
-use log::{error, info, warn};
 use pipewire as pw;
 use pw::properties::properties;
 use pw::spa::buffer::DataType;
@@ -190,7 +188,7 @@ impl WlxCapture for PipewireCapture {
             match tx_ctrl.send(PwChangeRequest::Pause) {
                 Ok(_) => (),
                 Err(_) => {
-                    warn!("{}: disconnected, stopping stream", &self.name);
+                    log::warn!("{}: disconnected, stopping stream", &self.name);
                 }
             }
         }
@@ -200,7 +198,7 @@ impl WlxCapture for PipewireCapture {
             match tx_ctrl.send(PwChangeRequest::Resume) {
                 Ok(_) => (),
                 Err(_) => {
-                    warn!("{}: disconnected, stopping stream", &self.name);
+                    log::warn!("{}: disconnected, stopping stream", &self.name);
                 }
             }
         }
@@ -235,7 +233,7 @@ fn main_loop(
         .state_changed({
             let name = name.clone();
             move |_, _, old, new| {
-                info!("{}: stream state changed: {:?} -> {:?}", &name, old, new);
+                log::info!("{}: stream state changed: {:?} -> {:?}", &name, old, new);
             }
         })
         .param_changed({
@@ -263,10 +261,10 @@ fn main_loop(
                     "SHM"
                 };
 
-                info!("{}: got {} video format:", &name, &kind);
-                info!("  format: {} ({:?})", info.format().as_raw(), info.format());
-                info!("  size: {}x{}", info.size().width, info.size().height);
-                info!("  modifier: {}", info.modifier());
+                log::info!("{}: got {} video format:", &name, &kind);
+                log::info!("  format: {} ({:?})", info.format().as_raw(), info.format());
+                log::info!("  size: {}x{}", info.size().width, info.size().height);
+                log::info!("  modifier: {}", info.modifier());
                 let Ok(params_bytes) = obj_to_bytes(get_buffer_params()) else {
                     log::warn!("{}: failed to serialize buffer params", &name);
                     return;
@@ -277,7 +275,7 @@ fn main_loop(
                 };
                 let mut pods = [params_pod];
                 if let Err(e) = stream.update_params(&mut pods) {
-                    error!("{}: failed to update params: {}", &name, e);
+                    log::error!("{}: failed to update params: {}", &name, e);
                 }
             }
         })
@@ -293,7 +291,7 @@ fn main_loop(
                 if let Some(mut buffer) = maybe_buffer {
                     let datas = buffer.datas_mut();
                     if datas.is_empty() {
-                        debug!("{}: no data", &name);
+                        log::debug!("{}: no data", &name);
                         return;
                     }
 
@@ -363,7 +361,9 @@ fn main_loop(
                                 }
                             }
                         }
-                        _ => panic!("Unknown data type"),
+                        _ => {
+                            log::error!("Received invalid frame data type ({:?})", datas[0].type_())
+                        }
                     }
                 }
             }
@@ -402,13 +402,13 @@ fn main_loop(
             }
             PwChangeRequest::Stop => {
                 main_loop.quit();
-                info!("{}: stopping pipewire loop", &name);
+                log::info!("{}: stopping pipewire loop", &name);
             }
         }
     });
 
     main_loop.run();
-    info!("{}: pipewire loop exited", &name);
+    log::info!("{}: pipewire loop exited", &name);
     Ok::<(), Error>(())
 }
 

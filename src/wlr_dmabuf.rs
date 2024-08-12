@@ -1,4 +1,9 @@
-use std::{os::fd::IntoRawFd, sync::mpsc, thread::JoinHandle};
+use std::{
+    collections::VecDeque,
+    os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd},
+    sync::mpsc,
+    thread::JoinHandle,
+};
 
 use smithay_client_toolkit::reexports::protocols_wlr::export_dmabuf::v1::client::zwlr_export_dmabuf_frame_v1::{self, ZwlrExportDmabufFrameV1};
 use wayland_client::{Connection, QueueHandle, Dispatch, Proxy};
@@ -17,6 +22,7 @@ pub struct WlrDmabufCapture {
     handle: Option<JoinHandle<Box<WlxClient>>>,
     sender: Option<mpsc::SyncSender<WlxFrame>>,
     receiver: Option<mpsc::Receiver<WlxFrame>>,
+    fds: VecDeque<RawFd>,
 }
 
 impl WlrDmabufCapture {
@@ -27,6 +33,7 @@ impl WlrDmabufCapture {
             handle: None,
             sender: None,
             receiver: None,
+            fds: VecDeque::new(),
         }
     }
 }
@@ -47,7 +54,19 @@ impl WlxCapture for WlrDmabufCapture {
     }
     fn receive(&mut self) -> Option<WlxFrame> {
         if let Some(rx) = self.receiver.as_ref() {
-            return rx.try_iter().last();
+            if let Some(WlxFrame::Dmabuf(last)) = rx.try_iter().last() {
+                // this is the only protocol that requires us to manually close the FD
+                while self.fds.len() > 6 * last.num_planes {
+                    // safe unwrap
+                    let _ = unsafe { OwnedFd::from_raw_fd(self.fds.pop_back().unwrap()) };
+                }
+                for p in 0..last.num_planes {
+                    if let Some(fd) = last.planes[p].fd {
+                        self.fds.push_front(fd);
+                    }
+                }
+                return Some(WlxFrame::Dmabuf(last));
+            }
         }
         None
     }

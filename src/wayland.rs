@@ -144,7 +144,8 @@ impl WlxClient {
             extent.0 = extent.0.max(output.logical_pos.0 + output.logical_size.0);
             extent.1 = extent.1.max(output.logical_pos.1 + output.logical_size.1);
         }
-        extent
+        let origin = self.get_desktop_origin();
+        (extent.0 - origin.0, extent.1 - origin.1)
     }
 
     pub fn iter_events(&mut self) -> impl Iterator<Item = OutputChangeEvent> + '_ {

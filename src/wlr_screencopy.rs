@@ -176,7 +176,7 @@ fn request_screencopy_frame(
                             width,
                             height,
                             fourcc,
-                            modifier: 0,
+                            ..Default::default()
                         },
                         plane: FramePlane {
                             fd: Some(data.fd),

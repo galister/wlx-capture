@@ -82,7 +82,7 @@ impl WlxCapture for XshmCapture {
                                         width: image.width() as _,
                                         height: image.height() as _,
                                         fourcc: DRM_FORMAT_XRGB8888.into(),
-                                        modifier: 0,
+                                        ..Default::default()
                                     },
                                     ptr: unsafe { image.as_ptr() as _ },
                                     size,

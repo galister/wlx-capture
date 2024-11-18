@@ -2,32 +2,37 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use ashpd::{
-    desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType},
-    WindowIdentifier,
+use ashpd::desktop::{
+    screencast::{CursorMode, Screencast, SourceType},
+    PersistMode,
 };
 
 pub use ashpd::Error as AshpdError;
 
 use pipewire as pw;
+use pw::spa;
+
 use pw::properties::properties;
-use pw::spa::buffer::DataType;
-use pw::spa::param::video::VideoFormat;
-use pw::spa::param::video::VideoInfoRaw;
-use pw::spa::param::ParamType;
-use pw::spa::pod::serialize::GenError;
-use pw::spa::pod::ChoiceValue;
-use pw::spa::pod::Pod;
-use pw::spa::pod::{Object, Property, PropertyFlags, Value};
-use pw::spa::utils::Choice;
-use pw::spa::utils::ChoiceEnum;
-use pw::spa::utils::ChoiceFlags;
 use pw::stream::{Stream, StreamFlags};
 use pw::{context::Context, main_loop::MainLoop, Error};
+use spa::buffer::DataType;
+use spa::buffer::MetaData;
+use spa::buffer::MetaType;
+use spa::param::video::VideoFormat;
+use spa::param::video::VideoInfoRaw;
+use spa::param::ParamType;
+use spa::pod::serialize::GenError;
+use spa::pod::ChoiceValue;
+use spa::pod::Pod;
+use spa::pod::{Object, Property, PropertyFlags, Value};
+use spa::utils::Choice;
+use spa::utils::ChoiceEnum;
+use spa::utils::ChoiceFlags;
 
 use crate::frame::DrmFormat;
 use crate::frame::FourCC;
 use crate::frame::FrameFormat;
+use crate::frame::Transform;
 use crate::frame::WlxFrame;
 use crate::frame::DRM_FORMAT_ABGR2101010;
 use crate::frame::DRM_FORMAT_ABGR8888;
@@ -88,10 +93,7 @@ pub async fn pipewire_select_screen(
         )
         .await?;
 
-    let response = proxy
-        .start(&session, &WindowIdentifier::default())
-        .await?
-        .response()?;
+    let response = proxy.start(&session, None).await?.response()?;
 
     let streams: Vec<_> = response
         .streams()
@@ -289,6 +291,28 @@ fn main_loop(
                 }
 
                 if let Some(mut buffer) = maybe_buffer {
+                    if let MetaData::Header(header) = buffer.find_meta_data(MetaType::Header) {
+                        if header.flags & spa::sys::SPA_META_HEADER_FLAG_CORRUPTED != 0 {
+                            log::warn!("{}: PipeWire buffer is corrupt.", &name);
+                            return;
+                        }
+                    }
+
+                    if let MetaData::VideoTransform(transform) =
+                        buffer.find_meta_data(MetaType::VideoTransform)
+                    {
+                        format.transform = match transform.transform {
+                            spa::sys::SPA_META_TRANSFORMATION_90 => Transform::Rotated90,
+                            spa::sys::SPA_META_TRANSFORMATION_180 => Transform::Rotated180,
+                            spa::sys::SPA_META_TRANSFORMATION_270 => Transform::Rotated270,
+                            spa::sys::SPA_META_TRANSFORMATION_Flipped => Transform::Flipped,
+                            spa::sys::SPA_META_TRANSFORMATION_Flipped90 => Transform::Flipped90,
+                            spa::sys::SPA_META_TRANSFORMATION_Flipped180 => Transform::Flipped180,
+                            spa::sys::SPA_META_TRANSFORMATION_Flipped270 => Transform::Flipped270,
+                            _ => Transform::None,
+                        }
+                    }
+
                     let datas = buffer.datas_mut();
                     if datas.is_empty() {
                         log::debug!("{}: no data", &name);
@@ -384,7 +408,7 @@ fn main_loop(
         .collect();
 
     stream.connect(
-        pw::spa::utils::Direction::Input,
+        spa::utils::Direction::Input,
         Some(node_id),
         StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
         params.as_mut_slice(),
@@ -412,10 +436,10 @@ fn main_loop(
     Ok::<(), Error>(())
 }
 
-fn obj_to_bytes(obj: pw::spa::pod::Object) -> Result<Vec<u8>, GenError> {
-    Ok(pw::spa::pod::serialize::PodSerializer::serialize(
+fn obj_to_bytes(obj: spa::pod::Object) -> Result<Vec<u8>, GenError> {
+    Ok(spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
-        &pw::spa::pod::Value::Object(obj),
+        &spa::pod::Value::Object(obj),
     )?
     .0
     .into_inner())
@@ -427,58 +451,58 @@ fn get_buffer_params() -> Object {
         | (1 << DataType::DmaBuf.as_raw());
 
     let property = Property {
-        key: pw::spa::sys::SPA_PARAM_BUFFERS_dataType,
+        key: spa::sys::SPA_PARAM_BUFFERS_dataType,
         flags: PropertyFlags::empty(),
         value: Value::Int(data_types),
     };
 
-    pw::spa::pod::object!(
-        pw::spa::utils::SpaTypes::ObjectParamBuffers,
-        pw::spa::param::ParamType::Buffers,
+    spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamBuffers,
+        spa::param::ParamType::Buffers,
         property,
     )
 }
 
 fn get_format_params(fmt: Option<&DrmFormat>) -> Object {
-    let mut obj = pw::spa::pod::object!(
-        pw::spa::utils::SpaTypes::ObjectParamFormat,
-        pw::spa::param::ParamType::EnumFormat,
-        pw::spa::pod::property!(
-            pw::spa::param::format::FormatProperties::MediaType,
+    let mut obj = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamFormat,
+        spa::param::ParamType::EnumFormat,
+        spa::pod::property!(
+            spa::param::format::FormatProperties::MediaType,
             Id,
-            pw::spa::param::format::MediaType::Video
+            spa::param::format::MediaType::Video
         ),
-        pw::spa::pod::property!(
-            pw::spa::param::format::FormatProperties::MediaSubtype,
+        spa::pod::property!(
+            spa::param::format::FormatProperties::MediaSubtype,
             Id,
-            pw::spa::param::format::MediaSubtype::Raw
+            spa::param::format::MediaSubtype::Raw
         ),
-        pw::spa::pod::property!(
-            pw::spa::param::format::FormatProperties::VideoSize,
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoSize,
             Choice,
             Range,
             Rectangle,
-            pw::spa::utils::Rectangle {
+            spa::utils::Rectangle {
                 width: 256,
                 height: 256,
             },
-            pw::spa::utils::Rectangle {
+            spa::utils::Rectangle {
                 width: 1,
                 height: 1,
             },
-            pw::spa::utils::Rectangle {
+            spa::utils::Rectangle {
                 width: 8192,
                 height: 8192,
             }
         ),
-        pw::spa::pod::property!(
-            pw::spa::param::format::FormatProperties::VideoFramerate,
+        spa::pod::property!(
+            spa::param::format::FormatProperties::VideoFramerate,
             Choice,
             Range,
             Fraction,
-            pw::spa::utils::Fraction { num: 0, denom: 1 },
-            pw::spa::utils::Fraction { num: 0, denom: 1 },
-            pw::spa::utils::Fraction {
+            spa::utils::Fraction { num: 0, denom: 1 },
+            spa::utils::Fraction { num: 0, denom: 1 },
+            spa::utils::Fraction {
                 num: 1000,
                 denom: 1
             }
@@ -488,8 +512,8 @@ fn get_format_params(fmt: Option<&DrmFormat>) -> Object {
     if let Some(fmt) = fmt {
         let spa_fmt = fourcc_to_spa(fmt.fourcc);
 
-        let prop = pw::spa::pod::property!(
-            pw::spa::param::format::FormatProperties::VideoFormat,
+        let prop = spa::pod::property!(
+            spa::param::format::FormatProperties::VideoFormat,
             Choice,
             Enum,
             Id,
@@ -500,7 +524,7 @@ fn get_format_params(fmt: Option<&DrmFormat>) -> Object {
 
         // TODO rewrite when property macro supports Long
         let prop = Property {
-            key: pw::spa::param::format::FormatProperties::VideoModifier.as_raw(),
+            key: spa::param::format::FormatProperties::VideoModifier.as_raw(),
             flags: PropertyFlags::MANDATORY | PropertyFlags::DONT_FIXATE,
             value: Value::Choice(ChoiceValue::Long(Choice(
                 ChoiceFlags::empty(),
@@ -512,18 +536,18 @@ fn get_format_params(fmt: Option<&DrmFormat>) -> Object {
         };
         obj.properties.push(prop);
     } else {
-        let prop = pw::spa::pod::property!(
-            pw::spa::param::format::FormatProperties::VideoFormat,
+        let prop = spa::pod::property!(
+            spa::param::format::FormatProperties::VideoFormat,
             Choice,
             Enum,
             Id,
-            pw::spa::param::video::VideoFormat::RGBA,
-            pw::spa::param::video::VideoFormat::RGBA,
-            pw::spa::param::video::VideoFormat::BGRA,
-            pw::spa::param::video::VideoFormat::RGBx,
-            pw::spa::param::video::VideoFormat::BGRx,
-            pw::spa::param::video::VideoFormat::ABGR_210LE,
-            pw::spa::param::video::VideoFormat::xBGR_210LE,
+            spa::param::video::VideoFormat::RGBA,
+            spa::param::video::VideoFormat::RGBA,
+            spa::param::video::VideoFormat::BGRA,
+            spa::param::video::VideoFormat::RGBx,
+            spa::param::video::VideoFormat::BGRx,
+            spa::param::video::VideoFormat::ABGR_210LE,
+            spa::param::video::VideoFormat::xBGR_210LE,
         );
         obj.properties.push(prop);
     }

@@ -60,11 +60,25 @@ pub enum WlxFrame {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub enum Transform {
+    #[default]
+    None = 0,
+    Rotated90,
+    Rotated180,
+    Rotated270,
+    Flipped,
+    Flipped90,
+    Flipped180,
+    Flipped270,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct FrameFormat {
     pub width: u32,
     pub height: u32,
     pub fourcc: FourCC,
     pub modifier: u64,
+    pub transform: Transform,
 }
 
 impl FrameFormat {

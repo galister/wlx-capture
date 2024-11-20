@@ -187,6 +187,20 @@ impl WlxClient {
     }
 }
 
+pub(crate) fn wl_transform_to_frame_transform(transform: Transform) -> crate::frame::Transform {
+    match transform {
+        Transform::Normal => crate::frame::Transform::Normal,
+        Transform::_90 => crate::frame::Transform::Rotated90,
+        Transform::_180 => crate::frame::Transform::Rotated180,
+        Transform::_270 => crate::frame::Transform::Rotated270,
+        Transform::Flipped => crate::frame::Transform::Flipped,
+        Transform::Flipped90 => crate::frame::Transform::Flipped90,
+        Transform::Flipped180 => crate::frame::Transform::Flipped180,
+        Transform::Flipped270 => crate::frame::Transform::Flipped270,
+        _ => crate::frame::Transform::Undefined,
+    }
+}
+
 impl Dispatch<ZxdgOutputV1, u32> for WlxClient {
     fn event(
         state: &mut Self,

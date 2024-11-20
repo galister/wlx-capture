@@ -62,7 +62,8 @@ pub enum WlxFrame {
 #[derive(Debug, Clone, Copy, Default)]
 pub enum Transform {
     #[default]
-    None = 0,
+    Undefined,
+    Normal,
     Rotated90,
     Rotated180,
     Rotated270,

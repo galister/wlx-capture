@@ -21,7 +21,7 @@ use crate::{
         DrmFormat, FourCC, FrameFormat, FramePlane, MemFdFrame, WlxFrame, DRM_FORMAT_ARGB8888,
         DRM_FORMAT_XRGB8888,
     },
-    wayland::WlxClient,
+    wayland::{wl_transform_to_frame_transform, WlxClient},
     WlxCapture,
 };
 
@@ -149,6 +149,8 @@ fn request_screencopy_frame(
         return client;
     };
 
+    let transform = wl_transform_to_frame_transform(output.transform);
+
     let (tx, rx) = mpsc::sync_channel::<ScreenCopyEvent>(16);
 
     let _ =
@@ -176,6 +178,7 @@ fn request_screencopy_frame(
                             width,
                             height,
                             fourcc,
+                            transform,
                             ..Default::default()
                         },
                         plane: FramePlane {

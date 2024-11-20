@@ -302,6 +302,7 @@ fn main_loop(
                         buffer.find_meta_data(MetaType::VideoTransform)
                     {
                         format.transform = match transform.transform {
+                            spa::sys::SPA_META_TRANSFORMATION_None => Transform::Normal,
                             spa::sys::SPA_META_TRANSFORMATION_90 => Transform::Rotated90,
                             spa::sys::SPA_META_TRANSFORMATION_180 => Transform::Rotated180,
                             spa::sys::SPA_META_TRANSFORMATION_270 => Transform::Rotated270,
@@ -309,8 +310,9 @@ fn main_loop(
                             spa::sys::SPA_META_TRANSFORMATION_Flipped90 => Transform::Flipped90,
                             spa::sys::SPA_META_TRANSFORMATION_Flipped180 => Transform::Flipped180,
                             spa::sys::SPA_META_TRANSFORMATION_Flipped270 => Transform::Flipped270,
-                            _ => Transform::None,
-                        }
+                            _ => Transform::Undefined,
+                        };
+                        log::debug!("{}: Transform: {:?}", &name, &format.transform);
                     }
 
                     let datas = buffer.datas_mut();

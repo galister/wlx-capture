@@ -85,7 +85,7 @@ impl WlxClient {
                 .expect(WlSeat::interface().name),
             wl_shm: globals.bind(&qh, 1..=1, ()).expect(WlShm::interface().name),
             maybe_wlr_dmabuf_mgr: globals.bind(&qh, 1..=1, ()).ok(),
-            maybe_wlr_screencopy_mgr: globals.bind(&qh, 1..=1, ()).ok(),
+            maybe_wlr_screencopy_mgr: globals.bind(&qh, 2..=2, ()).ok(),
             outputs: IdMap::new(),
             queue: Arc::new(Mutex::new(queue)),
             globals,

@@ -111,8 +111,10 @@ impl WlxCapture for WlrScreencopyCapture {
         self.request_new_frame();
     }
     fn request_new_frame(&mut self) {
+        let mut wait_for_damage = false;
         if let Some(handle) = self.handle.take() {
             if handle.is_finished() {
+                wait_for_damage = true;
                 self.wl = Some(handle.join().unwrap()); // safe to unwrap because we checked is_finished
             } else {
                 self.handle = Some(handle);
@@ -130,7 +132,7 @@ impl WlxCapture for WlrScreencopyCapture {
                 .clone()
                 .expect("must call init once before request_new_frame");
             let output_id = self.output_id;
-            move || request_screencopy_frame(wl, output_id, sender)
+            move || request_screencopy_frame(wl, output_id, sender, wait_for_damage)
         }));
     }
 }
@@ -140,6 +142,7 @@ fn request_screencopy_frame(
     client: Box<WlxClient>,
     output_id: u32,
     sender: Sender<(WlxFrame, BufData)>,
+    wait_for_damage: bool,
 ) -> Box<WlxClient> {
     let Some(screencopy_manager) = client.maybe_wlr_screencopy_mgr.as_ref() else {
         return client;
@@ -153,7 +156,7 @@ fn request_screencopy_frame(
 
     let (tx, rx) = mpsc::sync_channel::<ScreenCopyEvent>(16);
 
-    let _ =
+    let proxy =
         screencopy_manager.capture_output(1, &output.wl_output, &client.queue_handle, tx.clone());
 
     let name = output.name.clone();
@@ -188,6 +191,11 @@ fn request_screencopy_frame(
                         },
                     };
                     log::trace!("{}: Received screencopy buffer, copying", name.as_ref());
+                    if wait_for_damage {
+                        proxy.copy_with_damage(&data.wl_buffer);
+                    } else {
+                        proxy.copy(&data.wl_buffer);
+                    }
                     frame_buffer = Some((frame, data));
                     client.dispatch();
                 }
@@ -271,7 +279,6 @@ impl Dispatch<ZwlrScreencopyFrameV1, SyncSender<ScreenCopyEvent>> for WlxClient 
                     (),
                 );
 
-                proxy.copy(&wl_buffer);
                 let _ = data.send(ScreenCopyEvent::Buffer {
                     data: BufData {
                         wl_buffer,

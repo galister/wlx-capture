@@ -275,7 +275,22 @@ fn main_loop(
                     log::warn!("{}: failed to deserialize buffer params", &name);
                     return;
                 };
-                let mut pods = [params_pod];
+
+                let header_bytes = obj_to_bytes(get_meta_object(
+                    spa::sys::SPA_META_Header,
+                    std::mem::size_of::<spa::sys::spa_meta_header>(),
+                ))
+                .unwrap(); // want panic
+                let header_pod = Pod::from_bytes(&header_bytes).unwrap(); // want panic
+
+                let xform_bytes = obj_to_bytes(get_meta_object(
+                    spa::sys::SPA_META_VideoTransform,
+                    std::mem::size_of::<spa::sys::spa_meta_videotransform>(),
+                ))
+                .unwrap(); // want panic
+                let xform_pod = Pod::from_bytes(&xform_bytes).unwrap(); // want panic
+
+                let mut pods = [params_pod, header_pod, xform_pod];
                 if let Err(e) = stream.update_params(&mut pods) {
                     log::error!("{}: failed to update params: {}", &name, e);
                 }
@@ -462,6 +477,27 @@ fn get_buffer_params() -> Object {
         spa::utils::SpaTypes::ObjectParamBuffers,
         spa::param::ParamType::Buffers,
         property,
+    )
+}
+
+fn get_meta_object(key: u32, size: usize) -> Object {
+    let meta_type_property = Property {
+        key: spa::sys::SPA_PARAM_META_type,
+        flags: PropertyFlags::empty(),
+        value: Value::Id(spa::utils::Id(key)),
+    };
+
+    let meta_size_property = Property {
+        key: spa::sys::SPA_PARAM_META_size,
+        flags: PropertyFlags::empty(),
+        value: Value::Int(size as i32),
+    };
+
+    spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamMeta,
+        spa::param::ParamType::Meta,
+        meta_type_property,
+        meta_size_property,
     )
 }
 

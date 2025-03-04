@@ -18,6 +18,9 @@ pub mod pipewire;
 #[cfg(feature = "xshm")]
 pub mod xshm;
 
+#[cfg(feature = "nvfbc")]
+pub mod nvfbc;
+
 pub trait WlxCapture {
     fn init(&mut self, dmabuf_formats: &[DrmFormat]);
     fn is_ready(&self) -> bool;

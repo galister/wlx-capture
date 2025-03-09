@@ -11,7 +11,7 @@ documentation = "https://docs.rs/wlx-capture"
 license = "GPL-3.0"
 
 [features]
-default = ["wlr", "pipewire", "xshm", "nvfbc"]
+default = ["wlr", "pipewire", "xshm"]
 egl = []
 wlr = ["wayland"]
 pipewire = ["wayland", "dep:ashpd", "dep:pipewire"]

@@ -40,7 +40,9 @@ impl WlxCapture for NVFBCCapture {
                     let monitor_name = "NvFBC Main Monitor"; //capturer.status().unwrap().outputs[0].name;
                     match rx_cmd.recv() {
                         Ok(_) => {
-                            if let Ok(frame_info) = capturer.next_frame(CaptureMethod::NoWait) {
+                            if let Ok(frame_info) =
+                                capturer.next_frame(CaptureMethod::NoWaitIfNewFrame)
+                            {
                                 log::trace!("{:#?}", frame_info);
 
                                 let memptr_frame = MemPtrFrame {
@@ -72,7 +74,7 @@ impl WlxCapture for NVFBCCapture {
                                     }
                                 }
                             } else {
-                                log::debug!("{}: NvFBC capture failed failed", monitor_name);
+                                log::debug!("{}: NvFBC capture failed", monitor_name);
                             }
                         }
                         Err(_) => {

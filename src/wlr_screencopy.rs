@@ -1,11 +1,11 @@
 use libc::{O_CREAT, O_RDWR, S_IRUSR, S_IWUSR};
 use std::{
-    collections::VecDeque,
+    any::Any,
     ffi::CString,
     os::fd::{BorrowedFd, RawFd},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::{self, Sender, SyncSender},
+        mpsc::{self, SyncSender},
     },
     thread::JoinHandle,
 };
@@ -53,61 +53,83 @@ enum ScreenCopyEvent {
     Failed,
 }
 
-pub struct WlrScreencopyCapture {
+struct CaptureData<U, R>
+where
+    U: Any,
+    R: Any,
+{
+    sender: mpsc::SyncSender<R>,
+    receiver: mpsc::Receiver<R>,
+    user_data: U,
+    receive_callback: fn(&U, WlxFrame) -> Option<R>,
+}
+
+pub struct WlrScreencopyCapture<U, R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
     output_id: u32,
     wl: Option<Box<WlxClient>>,
     handle: Option<JoinHandle<Box<WlxClient>>>,
-    sender: Option<mpsc::Sender<(WlxFrame, BufData)>>,
-    receiver: Option<mpsc::Receiver<(WlxFrame, BufData)>>,
-    buffers: VecDeque<BufData>,
+    data: Option<CaptureData<U, R>>,
 }
 
-impl WlrScreencopyCapture {
+impl<U, R> WlrScreencopyCapture<U, R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
     pub fn new(wl: WlxClient, output_id: u32) -> Self {
         Self {
             output_id,
             wl: Some(Box::new(wl)),
             handle: None,
-            sender: None,
-            receiver: None,
-            buffers: VecDeque::with_capacity(2),
+            data: None,
         }
     }
 }
 
-impl WlxCapture for WlrScreencopyCapture {
-    fn init(&mut self, _: &[DrmFormat]) {
+impl<U, R> WlxCapture<U, R> for WlrScreencopyCapture<U, R>
+where
+    U: Any + Send + Clone,
+    R: Any + Send,
+{
+    fn init(
+        &mut self,
+        _: &[DrmFormat],
+        user_data: U,
+        receive_callback: fn(&U, WlxFrame) -> Option<R>,
+    ) {
         debug_assert!(self.wl.is_some());
 
-        let (tx, rx) = mpsc::channel();
-        self.sender = Some(tx);
-        self.receiver = Some(rx);
+        let (sender, receiver) = mpsc::sync_channel(2);
+        self.data = Some(CaptureData {
+            sender,
+            receiver,
+            user_data,
+            receive_callback,
+        });
     }
     fn is_ready(&self) -> bool {
-        self.receiver.is_some()
+        self.data.is_some()
     }
     fn supports_dmbuf(&self) -> bool {
         false // screencopy v1
     }
-    fn receive(&mut self) -> Option<WlxFrame> {
-        if let Some(rx) = self.receiver.as_ref() {
-            if let Some((frame, data)) = rx.try_iter().last() {
-                if self.buffers.len() > 1 {
-                    self.buffers.pop_front();
-                }
-                self.buffers.push_back(data);
-                return Some(frame);
-            }
+    fn receive(&mut self) -> Option<R> {
+        if let Some(data) = self.data.as_ref() {
+            data.receiver.try_iter().last()
+        } else {
+            None
         }
-        None
     }
     fn pause(&mut self) {}
     fn resume(&mut self) {
-        if self.sender.is_none() {
+        if self.data.is_none() {
             return;
         }
         self.receive(); // clear old frames
-        self.buffers.clear();
         self.request_new_frame();
     }
     fn request_new_frame(&mut self) {
@@ -126,24 +148,44 @@ impl WlxCapture for WlrScreencopyCapture {
             return;
         };
 
+        let data = self
+            .data
+            .as_ref()
+            .expect("must call init once before request_new_frame");
+
         self.handle = Some(std::thread::spawn({
-            let sender = self
-                .sender
-                .clone()
-                .expect("must call init once before request_new_frame");
+            let sender = data.sender.clone();
+            let user_data = data.user_data.clone();
+            let receive_callback = data.receive_callback;
+
             let output_id = self.output_id;
-            move || request_screencopy_frame(wl, output_id, sender, wait_for_damage)
+            move || {
+                request_screencopy_frame(
+                    wl,
+                    output_id,
+                    sender,
+                    user_data,
+                    receive_callback,
+                    wait_for_damage,
+                )
+            }
         }));
     }
 }
 
 /// Request a new DMA-Buf frame using the wlr-screencopy protocol.
-fn request_screencopy_frame(
+fn request_screencopy_frame<U, R>(
     client: Box<WlxClient>,
     output_id: u32,
-    sender: Sender<(WlxFrame, BufData)>,
+    sender: SyncSender<R>,
+    user_data: U,
+    receive_callback: fn(&U, WlxFrame) -> Option<R>,
     wait_for_damage: bool,
-) -> Box<WlxClient> {
+) -> Box<WlxClient>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
     let Some(screencopy_manager) = client.maybe_wlr_screencopy_mgr.as_ref() else {
         return client;
     };
@@ -200,9 +242,12 @@ fn request_screencopy_frame(
                     client.dispatch();
                 }
                 ScreenCopyEvent::Ready => {
-                    if let Some((frame, data)) = frame_buffer {
-                        let _ = sender.send((WlxFrame::MemFd(frame), data));
-                        log::trace!("{}: Frame ready", name.as_ref());
+                    if let Some((frame, buffer)) = frame_buffer {
+                        if let Some(r) = receive_callback(&user_data, WlxFrame::MemFd(frame)) {
+                            let _ = sender.send(r);
+                            log::trace!("{}: Frame ready", name.as_ref());
+                        }
+                        drop(buffer);
                     }
                     break 'receiver;
                 }

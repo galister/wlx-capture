@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     collections::VecDeque,
     os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd},
     sync::mpsc,
@@ -16,45 +17,75 @@ use crate::{
 
 use log::{debug, warn};
 
-pub struct WlrDmabufCapture {
+struct CaptureData<U, R>
+where
+    U: Any,
+    R: Any,
+{
+    sender: mpsc::SyncSender<WlxFrame>,
+    receiver: mpsc::Receiver<WlxFrame>,
+    user_data: U,
+    receive_callback: fn(&U, WlxFrame) -> Option<R>,
+}
+
+pub struct WlrDmabufCapture<U, R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
     output_id: u32,
     wl: Option<Box<WlxClient>>,
     handle: Option<JoinHandle<Box<WlxClient>>>,
-    sender: Option<mpsc::SyncSender<WlxFrame>>,
-    receiver: Option<mpsc::Receiver<WlxFrame>>,
+    data: Option<CaptureData<U, R>>,
     fds: VecDeque<RawFd>,
 }
 
-impl WlrDmabufCapture {
+impl<U, R> WlrDmabufCapture<U, R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
     pub fn new(wl: WlxClient, output_id: u32) -> Self {
         Self {
             output_id,
             wl: Some(Box::new(wl)),
             handle: None,
-            sender: None,
-            receiver: None,
+            data: None,
             fds: VecDeque::new(),
         }
     }
 }
 
-impl WlxCapture for WlrDmabufCapture {
-    fn init(&mut self, _: &[DrmFormat]) {
+impl<U, R> WlxCapture<U, R> for WlrDmabufCapture<U, R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
+    fn init(
+        &mut self,
+        _: &[DrmFormat],
+        user_data: U,
+        receive_callback: fn(&U, WlxFrame) -> Option<R>,
+    ) {
         debug_assert!(self.wl.is_some());
 
-        let (tx, rx) = std::sync::mpsc::sync_channel::<WlxFrame>(2);
-        self.sender = Some(tx);
-        self.receiver = Some(rx);
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<WlxFrame>(2);
+        self.data = Some(CaptureData {
+            sender,
+            receiver,
+            user_data,
+            receive_callback,
+        });
     }
     fn is_ready(&self) -> bool {
-        self.receiver.is_some()
+        self.data.is_some()
     }
     fn supports_dmbuf(&self) -> bool {
         true
     }
-    fn receive(&mut self) -> Option<WlxFrame> {
-        if let Some(rx) = self.receiver.as_ref() {
-            if let Some(WlxFrame::Dmabuf(last)) = rx.try_iter().last() {
+    fn receive(&mut self) -> Option<R> {
+        if let Some(data) = self.data.as_ref() {
+            if let Some(WlxFrame::Dmabuf(last)) = data.receiver.try_iter().last() {
                 // this is the only protocol that requires us to manually close the FD
                 while self.fds.len() > 6 * last.num_planes {
                     // safe unwrap
@@ -65,7 +96,7 @@ impl WlxCapture for WlrDmabufCapture {
                         self.fds.push_front(fd);
                     }
                 }
-                return Some(WlxFrame::Dmabuf(last));
+                return (data.receive_callback)(&data.user_data, WlxFrame::Dmabuf(last));
             }
         }
         None
@@ -90,9 +121,11 @@ impl WlxCapture for WlrDmabufCapture {
 
         self.handle = Some(std::thread::spawn({
             let sender = self
+                .data
+                .as_ref()
+                .expect("must call init once before request_new_frame")
                 .sender
-                .clone()
-                .expect("must call init once before request_new_frame");
+                .clone();
             let output_id = self.output_id;
             move || request_dmabuf_frame(wl, output_id, sender)
         }));

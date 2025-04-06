@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -126,30 +127,45 @@ pub enum PwChangeRequest {
     Stop,
 }
 
-pub struct PipewireCapture {
+struct CaptureData<R>
+where
+    R: Any + Send,
+{
+    tx_ctrl: pw::channel::Sender<PwChangeRequest>,
+    rx_frame: mpsc::Receiver<R>,
+}
+
+pub struct PipewireCapture<R>
+where
+    R: Any + Send,
+{
     name: Arc<str>,
-    tx_ctrl: Option<pw::channel::Sender<PwChangeRequest>>,
-    rx_frame: Option<mpsc::Receiver<WlxFrame>>,
+    data: Option<CaptureData<R>>,
     node_id: u32,
     handle: Option<JoinHandle<Result<(), Error>>>,
 }
 
-impl PipewireCapture {
+impl<R> PipewireCapture<R>
+where
+    R: Any + Send,
+{
     pub fn new(name: Arc<str>, node_id: u32) -> Self {
         PipewireCapture {
             name,
-            tx_ctrl: None,
-            rx_frame: None,
+            data: None,
             node_id,
             handle: None,
         }
     }
 }
 
-impl Drop for PipewireCapture {
+impl<R> Drop for PipewireCapture<R>
+where
+    R: Any + Send,
+{
     fn drop(&mut self) {
-        if let Some(tx_ctrl) = &self.tx_ctrl {
-            let _ = tx_ctrl.send(PwChangeRequest::Stop);
+        if let Some(data) = &self.data {
+            let _ = data.tx_ctrl.send(PwChangeRequest::Stop);
         }
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
@@ -157,37 +173,55 @@ impl Drop for PipewireCapture {
     }
 }
 
-impl WlxCapture for PipewireCapture {
-    fn init(&mut self, dmabuf_formats: &[DrmFormat]) {
+impl<U, R> WlxCapture<U, R> for PipewireCapture<R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
+    fn init(
+        &mut self,
+        dmabuf_formats: &[DrmFormat],
+        user_data: U,
+        receive_callback: fn(&U, WlxFrame) -> Option<R>,
+    ) {
         let (tx_frame, rx_frame) = mpsc::sync_channel(2);
         let (tx_ctrl, rx_ctrl) = pw::channel::channel();
 
-        self.tx_ctrl = Some(tx_ctrl);
-        self.rx_frame = Some(rx_frame);
+        self.data = Some(CaptureData { tx_ctrl, rx_frame });
 
         self.handle = Some(std::thread::spawn({
             let name = self.name.clone();
             let node_id = self.node_id;
             let formats = dmabuf_formats.to_vec();
 
-            move || main_loop(name, node_id, formats, tx_frame, rx_ctrl)
+            move || {
+                main_loop::<U, R>(
+                    name,
+                    node_id,
+                    formats,
+                    tx_frame,
+                    rx_ctrl,
+                    user_data,
+                    receive_callback,
+                )
+            }
         }));
     }
     fn is_ready(&self) -> bool {
-        self.rx_frame.is_some()
+        self.data.is_some()
     }
     fn supports_dmbuf(&self) -> bool {
         true
     }
-    fn receive(&mut self) -> Option<WlxFrame> {
-        if let Some(rx) = self.rx_frame.as_ref() {
-            return rx.try_iter().last();
+    fn receive(&mut self) -> Option<R> {
+        if let Some(data) = self.data.as_ref() {
+            return data.rx_frame.try_iter().last();
         }
         None
     }
     fn pause(&mut self) {
-        if let Some(tx_ctrl) = &self.tx_ctrl {
-            match tx_ctrl.send(PwChangeRequest::Pause) {
+        if let Some(data) = &self.data {
+            match data.tx_ctrl.send(PwChangeRequest::Pause) {
                 Ok(_) => (),
                 Err(_) => {
                     log::warn!("{}: disconnected, stopping stream", &self.name);
@@ -196,26 +230,37 @@ impl WlxCapture for PipewireCapture {
         }
     }
     fn resume(&mut self) {
-        if let Some(tx_ctrl) = &self.tx_ctrl {
-            match tx_ctrl.send(PwChangeRequest::Resume) {
-                Ok(_) => (),
+        if let Some(data) = &self.data {
+            match data.tx_ctrl.send(PwChangeRequest::Resume) {
+                Ok(_) => {
+                    log::debug!(
+                        "{}: dropped {} old frames before resuming",
+                        &self.name,
+                        data.rx_frame.try_iter().count()
+                    );
+                }
                 Err(_) => {
                     log::warn!("{}: disconnected, stopping stream", &self.name);
                 }
             }
         }
-        self.receive(); // clear old frames
     }
     fn request_new_frame(&mut self) {}
 }
 
-fn main_loop(
+fn main_loop<U, R>(
     name: Arc<str>,
     node_id: u32,
     dmabuf_formats: Vec<DrmFormat>,
-    sender: mpsc::SyncSender<WlxFrame>,
+    sender: mpsc::SyncSender<R>,
     receiver: pw::channel::Receiver<PwChangeRequest>,
-) -> Result<(), Error> {
+    user_data: U,
+    receive_callback: fn(&U, WlxFrame) -> Option<R>,
+) -> Result<(), Error>
+where
+    U: Any,
+    R: Any,
+{
     let main_loop = MainLoop::new(None)?;
     let context = Context::new(&main_loop)?;
     let core = context.connect(None)?;
@@ -298,6 +343,7 @@ fn main_loop(
         })
         .process({
             let name = name.clone();
+            let u = user_data;
             move |stream, format| {
                 let mut maybe_buffer = None;
                 // discard all but the newest frame
@@ -355,12 +401,15 @@ fn main_loop(
                             dmabuf.planes[..planes.len()].copy_from_slice(&planes[..planes.len()]);
 
                             let frame = WlxFrame::Dmabuf(dmabuf);
-                            match sender.try_send(frame) {
-                                Ok(_) => (),
-                                Err(mpsc::TrySendError::Full(_)) => (),
-                                Err(mpsc::TrySendError::Disconnected(_)) => {
-                                    log::warn!("{}: disconnected, stopping stream", &name);
-                                    let _ = stream.disconnect();
+
+                            if let Some(r) = receive_callback(&u, frame) {
+                                match sender.try_send(r) {
+                                    Ok(_) => (),
+                                    Err(mpsc::TrySendError::Full(_)) => (),
+                                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                                        log::warn!("{}: disconnected, stopping stream", &name);
+                                        let _ = stream.disconnect();
+                                    }
                                 }
                             }
                         }
@@ -375,12 +424,14 @@ fn main_loop(
                             };
 
                             let frame = WlxFrame::MemFd(memfd);
-                            match sender.try_send(frame) {
-                                Ok(_) => (),
-                                Err(mpsc::TrySendError::Full(_)) => (),
-                                Err(mpsc::TrySendError::Disconnected(_)) => {
-                                    log::warn!("{}: disconnected, stopping stream", &name);
-                                    let _ = stream.disconnect();
+                            if let Some(r) = receive_callback(&u, frame) {
+                                match sender.try_send(r) {
+                                    Ok(_) => (),
+                                    Err(mpsc::TrySendError::Full(_)) => (),
+                                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                                        log::warn!("{}: disconnected, stopping stream", &name);
+                                        let _ = stream.disconnect();
+                                    }
                                 }
                             }
                         }
@@ -393,12 +444,14 @@ fn main_loop(
                             };
 
                             let frame = WlxFrame::MemPtr(memptr);
-                            match sender.try_send(frame) {
-                                Ok(_) => (),
-                                Err(mpsc::TrySendError::Full(_)) => (),
-                                Err(mpsc::TrySendError::Disconnected(_)) => {
-                                    log::warn!("{}: disconnected, stopping stream", &name);
-                                    let _ = stream.disconnect();
+                            if let Some(r) = receive_callback(&u, frame) {
+                                match sender.try_send(r) {
+                                    Ok(_) => (),
+                                    Err(mpsc::TrySendError::Full(_)) => (),
+                                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                                        log::warn!("{}: disconnected, stopping stream", &name);
+                                        let _ = stream.disconnect();
+                                    }
                                 }
                             }
                         }

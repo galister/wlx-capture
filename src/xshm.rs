@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     env,
     error::Error,
     sync::{
@@ -19,41 +20,60 @@ pub struct XshmScreen {
     pub monitor: Monitor,
 }
 
-pub struct XshmCapture {
+pub struct XshmCapture<U, R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
     pub screen: Arc<XshmScreen>,
     sender: Option<mpsc::SyncSender<()>>,
-    receiver: Option<mpsc::Receiver<WlxFrame>>,
+    receiver: Option<mpsc::Receiver<R>>,
+    _dummy: Option<Box<U>>,
 }
 
-impl XshmCapture {
+impl<U, R> XshmCapture<U, R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
     pub fn new(screen: Arc<XshmScreen>) -> Self {
         Self {
             screen,
             sender: None,
             receiver: None,
+            _dummy: None,
         }
-    }
-
-    pub fn get_monitors() -> Result<Vec<Arc<XshmScreen>>, Box<dyn Error>> {
-        let display = env::var("DISPLAY")?;
-        let Ok(d) = rxscreen::Display::new(display) else {
-            return Err("X11: Failed to open display".into());
-        };
-        Ok(d.monitors()
-            .into_iter()
-            .enumerate()
-            .map(|x| {
-                Arc::new(XshmScreen {
-                    name: x.1.name().replace("DisplayPort", "DP").into(),
-                    monitor: x.1,
-                })
-            })
-            .collect())
     }
 }
 
-impl WlxCapture for XshmCapture {
-    fn init(&mut self, _: &[DrmFormat]) {
+pub fn xshm_get_monitors() -> Result<Vec<Arc<XshmScreen>>, Box<dyn Error>> {
+    let display = env::var("DISPLAY")?;
+    let Ok(d) = rxscreen::Display::new(display) else {
+        return Err("X11: Failed to open display".into());
+    };
+    Ok(d.monitors()
+        .into_iter()
+        .enumerate()
+        .map(|x| {
+            Arc::new(XshmScreen {
+                name: x.1.name().replace("DisplayPort", "DP").into(),
+                monitor: x.1,
+            })
+        })
+        .collect())
+}
+
+impl<U, R> WlxCapture<U, R> for XshmCapture<U, R>
+where
+    U: Any + Send,
+    R: Any + Send,
+{
+    fn init(
+        &mut self,
+        _: &[DrmFormat],
+        user_data: U,
+        receive_callback: fn(&U, WlxFrame) -> Option<R>,
+    ) {
         let (tx_frame, rx_frame) = std::sync::mpsc::sync_channel(4);
         let (tx_cmd, rx_cmd) = std::sync::mpsc::sync_channel(2);
         self.sender = Some(tx_cmd);
@@ -86,32 +106,29 @@ impl WlxCapture for XshmCapture {
                                     },
                                     ptr: unsafe { image.as_ptr() as _ },
                                     size,
-                                    mouse: d
-                                        .root_mouse_position()
-                                        .map(|root_pos| {
-                                            monitor.mouse_to_local(root_pos).map(|(x, y)| {
-                                                MouseMeta {
-                                                    x: (x as f32) / (image.width() as f32),
-                                                    y: (y as f32) / (image.height() as f32),
-                                                }
-                                            })
+                                    mouse: d.root_mouse_position().and_then(|root_pos| {
+                                        monitor.mouse_to_local(root_pos).map(|(x, y)| MouseMeta {
+                                            x: (x as f32) / (image.width() as f32),
+                                            y: (y as f32) / (image.height() as f32),
                                         })
-                                        .flatten(),
+                                    }),
                                 };
                                 log::trace!("{}: captured frame", &monitor.name());
 
                                 let frame = WlxFrame::MemPtr(memptr_frame);
-                                match tx_frame.try_send(frame) {
-                                    Ok(_) => (),
-                                    Err(mpsc::TrySendError::Full(_)) => {
-                                        log::debug!("{}: channel full", &monitor.name());
-                                    }
-                                    Err(mpsc::TrySendError::Disconnected(_)) => {
-                                        log::warn!(
-                                            "{}: capture thread channel closed (send)",
-                                            &monitor.name(),
-                                        );
-                                        break;
+                                if let Some(r) = receive_callback(&user_data, frame) {
+                                    match tx_frame.try_send(r) {
+                                        Ok(_) => (),
+                                        Err(mpsc::TrySendError::Full(_)) => {
+                                            log::debug!("{}: channel full", &monitor.name());
+                                        }
+                                        Err(mpsc::TrySendError::Disconnected(_)) => {
+                                            log::warn!(
+                                                "{}: capture thread channel closed (send)",
+                                                &monitor.name(),
+                                            );
+                                            break;
+                                        }
                                     }
                                 }
                             } else {
@@ -134,7 +151,7 @@ impl WlxCapture for XshmCapture {
     fn supports_dmbuf(&self) -> bool {
         false
     }
-    fn receive(&mut self) -> Option<WlxFrame> {
+    fn receive(&mut self) -> Option<R> {
         if let Some(rx) = self.receiver.as_ref() {
             return rx.try_iter().last();
         }
@@ -142,7 +159,13 @@ impl WlxCapture for XshmCapture {
     }
     fn pause(&mut self) {}
     fn resume(&mut self) {
-        self.receive(); // clear old frames
+        if let Some(rx) = self.receiver.as_ref() {
+            log::debug!(
+                "{}: dropped {} old frames before resuming",
+                &self.screen.name,
+                rx.try_iter().count()
+            );
+        }
         self.request_new_frame();
     }
     fn request_new_frame(&mut self) {

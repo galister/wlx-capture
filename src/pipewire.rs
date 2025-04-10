@@ -86,7 +86,7 @@ pub async fn pipewire_select_screen(
         _ => CursorMode::Hidden,
     };
 
-    log::error!("Selected cursor mode: {cursor_mode:?}");
+    log::debug!("Selected cursor mode: {cursor_mode:?}");
 
     let source_type = if screens_only {
         SourceType::Monitor.into()

@@ -112,6 +112,7 @@ pub struct DmabufFrame {
     pub format: FrameFormat,
     pub num_planes: usize,
     pub planes: [FramePlane; 4],
+    pub mouse: Option<MouseMeta>,
 }
 
 impl DmabufFrame {
@@ -165,6 +166,7 @@ impl DmabufFrame {
 pub struct MemFdFrame {
     pub format: FrameFormat,
     pub plane: FramePlane,
+    pub mouse: Option<MouseMeta>,
 }
 
 #[derive(Default)]

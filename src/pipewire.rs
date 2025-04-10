@@ -1,4 +1,6 @@
 use std::any::Any;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -33,6 +35,7 @@ use spa::utils::ChoiceFlags;
 use crate::frame::DrmFormat;
 use crate::frame::FourCC;
 use crate::frame::FrameFormat;
+use crate::frame::MouseMeta;
 use crate::frame::Transform;
 use crate::frame::WlxFrame;
 use crate::frame::DRM_FORMAT_ABGR2101010;
@@ -62,14 +65,28 @@ pub async fn pipewire_select_screen(
     persist: bool,
     multiple: bool,
 ) -> Result<PipewireSelectScreenResult, AshpdError> {
+    static CURSOR_MODES: AtomicU32 = AtomicU32::new(0);
+
     let proxy = Screencast::new().await?;
     let session = proxy.create_session().await?;
 
-    let cursor_mode = if embed_mouse {
-        CursorMode::Embedded
-    } else {
-        CursorMode::Hidden
+    let mut cursor_modes = CURSOR_MODES.load(Ordering::Relaxed);
+    if cursor_modes == 0 {
+        cursor_modes = proxy.get_property::<u32>("AvailableCursorModes").await?;
+
+        log::debug!("Available cursor modes: {cursor_modes:#x}");
+
+        // propery will be same system-wide, so race condition not a concern
+        CURSOR_MODES.store(cursor_modes, Ordering::Relaxed);
+    }
+
+    let cursor_mode = match embed_mouse {
+        true if cursor_modes & (CursorMode::Embedded as u32) != 0 => CursorMode::Embedded,
+        _ if cursor_modes & (CursorMode::Metadata as u32) != 0 => CursorMode::Metadata,
+        _ => CursorMode::Hidden,
     };
+
+    log::error!("Selected cursor mode: {cursor_mode:?}");
 
     let source_type = if screens_only {
         SourceType::Monitor.into()
@@ -376,6 +393,14 @@ where
                         log::debug!("{}: Transform: {:?}", &name, &format.transform);
                     }
 
+                    let mouse_meta = match buffer.find_meta_data(MetaType::Cursor) {
+                        MetaData::Cursor(cursor) if cursor.id != 0 => Some(MouseMeta {
+                            x: cursor.position.x as f32 / format.width as f32,
+                            y: cursor.position.y as f32 / format.height as f32,
+                        }),
+                        _ => None,
+                    };
+
                     let datas = buffer.datas_mut();
                     if datas.is_empty() {
                         log::debug!("{}: no data", &name);
@@ -396,6 +421,7 @@ where
                             let mut dmabuf = DmabufFrame {
                                 format: *format,
                                 num_planes: planes.len(),
+                                mouse: mouse_meta,
                                 ..Default::default()
                             };
                             dmabuf.planes[..planes.len()].copy_from_slice(&planes[..planes.len()]);
@@ -421,6 +447,7 @@ where
                                     offset: datas[0].chunk().offset(),
                                     stride: datas[0].chunk().stride(),
                                 },
+                                mouse: mouse_meta,
                             };
 
                             let frame = WlxFrame::MemFd(memfd);
@@ -440,7 +467,7 @@ where
                                 format: *format,
                                 ptr: datas[0].as_raw().data as _,
                                 size: datas[0].chunk().size() as _,
-                                mouse: None,
+                                mouse: mouse_meta,
                             };
 
                             let frame = WlxFrame::MemPtr(memptr);

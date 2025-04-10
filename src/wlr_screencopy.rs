@@ -231,6 +231,7 @@ where
                             offset: 0,
                             stride: stride as _,
                         },
+                        ..Default::default()
                     };
                     log::trace!("{}: Received screencopy buffer, copying", name.as_ref());
                     if wait_for_damage {

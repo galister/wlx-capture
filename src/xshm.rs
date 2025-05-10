@@ -47,7 +47,7 @@ where
 }
 
 pub fn xshm_get_monitors() -> Result<Vec<Arc<XshmScreen>>, Box<dyn Error>> {
-    let display = env::var("DISPLAY")?;
+    let display = env::var("DISPLAY").inspect_err(|e| log::info!("DISPLAY: {e:?}"))?;
     let Ok(d) = rxscreen::Display::new(display) else {
         return Err("X11: Failed to open display".into());
     };

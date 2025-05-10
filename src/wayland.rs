@@ -71,8 +71,12 @@ pub struct WlxClient {
 
 impl WlxClient {
     pub fn new() -> Option<Self> {
-        let connection = Connection::connect_to_env().ok()?;
-        let (globals, queue) = registry_queue_init::<Self>(&connection).ok()?;
+        let connection = Connection::connect_to_env()
+            .inspect_err(|e| log::info!("Wayland connection: {e:?}"))
+            .ok()?;
+        let (globals, queue) = registry_queue_init::<Self>(&connection)
+            .inspect_err(|e| log::info!("Wayland queue init: {e:?}"))
+            .ok()?;
         let qh = queue.handle();
 
         let mut state = Self {

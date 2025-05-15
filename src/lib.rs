@@ -16,9 +16,10 @@ pub mod wlr_screencopy;
 #[cfg(feature = "pipewire")]
 pub mod pipewire;
 
+#[cfg(feature = "nvfbc")]
+pub mod nvfbc;
 #[cfg(feature = "xshm")]
 pub mod xshm;
-
 pub trait WlxCapture<U, R> {
     fn init(
         &mut self,

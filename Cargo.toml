@@ -21,17 +21,21 @@ wayland = [
   "dep:wayland-protocols",
 ]
 xshm = ["dep:rxscreen"]
+nvfbc = ["dep:nvfbc"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+
+libc = "0.2.171"
 ashpd = { version = "0.11.0", default_features = false, features = [
   "async-std",
 ], optional = true }
 drm-fourcc = "2.2.0"
 idmap = "0.2.21"
-libc = "0.2.171"
 log = "0.4.27"
+nvfbc = { version = "0.1.5", optional = true }
+once_cell = "1.19.0"
 pipewire = { git = "https://gitlab.freedesktop.org/galister/pipewire-rs.git", ref = "ba32202c3c391004c3bb533b58fa75a50e47ff57", features = [
   "v0_3_33",
 ], optional = true }
